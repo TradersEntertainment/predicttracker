@@ -232,7 +232,7 @@ function App() {
         <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'center', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ background: 'rgba(0, 255, 136, 0.1)', border: '1px solid rgba(0, 255, 136, 0.3)', color: '#00ff88', padding: '6px 16px', borderRadius: '20px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00ff88', boxShadow: '0 0 10px #00ff88' }}></span>
-            Canlı Tarayıcı Aktif {scannerInfo && scannerInfo.seconds_since_last_scan >= 0 ? `(Son tarama: ${scannerInfo.seconds_since_last_scan}s önce | ${scannerInfo.total_scans_count} tarama)` : ''}
+            ⚡ Ultra-Fast Canlı Tarayıcı Aktif (1s) {scannerInfo && scannerInfo.seconds_since_last_scan >= 0 ? `(Son tarama: ${scannerInfo.seconds_since_last_scan}s önce | ${scannerInfo.total_scans_count} tarama)` : ''}
           </div>
           <button 
             onClick={() => handleTestTelegram()} 
@@ -309,7 +309,7 @@ function App() {
           </form>
 
           <div style={{ marginTop: '20px', padding: '12px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '10px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-            💡 <b>Bilgi:</b> Sistem her 5 saniyede bir Predict.fun GraphQL altyapısını taramaktadır. Balina yeni bir alım veya satım yaptığı anda otomatik bildirim Telegram'a düşer.
+            💡 <b>Bilgi:</b> Sistem her 1 saniyede bir (Ultra-Fast) eşzamanlı olarak Predict.fun GraphQL altyapısını taramaktadır. Balina yeni bir alım veya satım yaptığı anda otomatik bildirim Telegram'a düşer.
           </div>
         </div>
 

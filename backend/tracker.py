@@ -14,7 +14,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
-POLL_INTERVAL = 5
+# Ultra-Fast 1-second polling frequency
+POLL_INTERVAL = 1
 
 scanner_state = {
     "last_scan_time": 0,
@@ -162,7 +163,7 @@ def format_telegram_message(wallet: str, event_node: dict, nickname: str = None)
 async def fetch_global_matches(session: aiohttp.ClientSession):
     payload = {"query": QUERY_GLOBAL_MATCHES}
     try:
-        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=8) as resp:
+        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=5) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 edges = (data.get("data") or {}).get("matchEventLog", {}).get("edges") or []
@@ -174,7 +175,7 @@ async def fetch_global_matches(session: aiohttp.ClientSession):
 async def fetch_user_events(session: aiohttp.ClientSession, address: str):
     payload = {"query": QUERY_USER_ORDERS_LOG, "variables": {"address": address}}
     try:
-        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=8) as resp:
+        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=5) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 account = (data.get("data") or {}).get("account") or {}
@@ -210,7 +211,7 @@ async def process_global_matches(session: aiohttp.ClientSession, tracked_map: di
                 db_records.append((addr, event_key, timestamp))
                 continue
                 
-            logger.info(f"⚡ [GLOBAL MATCH] New trade for {nickname} ({addr[:6]}...)")
+            logger.info(f"⚡ [ULTRA-FAST MATCH] New trade for {nickname} ({addr[:6]}...)")
             scanner_state["last_trade_time"] = time.time()
             scanner_state["last_trade_info"] = f"{nickname}: {tx_hash[:10]}"
             try:
@@ -250,7 +251,7 @@ async def process_wallet(session: aiohttp.ClientSession, whale: dict, is_first_r
             db_records.append((address, event_key, timestamp))
             continue
             
-        logger.info(f"⚡ [USER EVENT] New event for {nickname} ({address[:6]}...)")
+        logger.info(f"⚡ [ULTRA-FAST EVENT] New event for {nickname} ({address[:6]}...)")
         scanner_state["last_trade_time"] = time.time()
         scanner_state["last_trade_info"] = f"{nickname}: {order_id}"
         try:
@@ -265,13 +266,14 @@ async def process_wallet(session: aiohttp.ClientSession, whale: dict, is_first_r
         await batch_record_activities(db_records)
 
 async def tracker_loop():
-    logger.info("Predict.fun Dual-Engine Tracker loop started")
+    logger.info("Predict.fun Ultra-Fast 1s Tracker loop started")
     count = await load_seen_cache()
     logger.info(f"📦 Loaded {count} seen tx hashes into memory cache")
     scanner_state["status"] = "active"
     
-    connector = aiohttp.TCPConnector(limit=50, enable_cleanup_closed=True)
-    timeout = aiohttp.ClientTimeout(total=10)
+    # Optimized TCP Connector with keepalive and nodelay
+    connector = aiohttp.TCPConnector(limit=100, enable_cleanup_closed=True, ttl_dns_cache=300, keepalive_timeout=60)
+    timeout = aiohttp.ClientTimeout(total=5)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=HEADERS) as session:
         is_first_run = (count == 0)
@@ -284,7 +286,7 @@ async def tracker_loop():
                 await process_global_matches(session, tracked_map, is_first_run=is_first_run)
                 for w in active_whales:
                     await process_wallet(session, w, is_first_run=is_first_run)
-                await send_notification(f"✅ <b>PREDICT TRACKER ÇİFT MOTORLU SİSTEM BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina takipte\n📦 {count} kayıtlı işlem hafızada\n⏱ Tarama aralığı: {POLL_INTERVAL}s (Global Trade Feed + User Event Stream)")
+                await send_notification(f"⚡ <b>ULTRA-FAST PREDICT TRACKER AKTİF!</b>\n🐋 {len(active_whales)} balina takipte\n⏱ Tarama hızı: <b>Her 1 saniyede bir (Ultra-Fast)</b>\n🔥 Anlık salise hızında bildirim gönderimi aktif!")
             else:
                 await send_notification("✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\nLütfen takip için aktif bir cüzdan adresi ekleyin.")
         except Exception as e:
@@ -304,11 +306,11 @@ async def tracker_loop():
 
                 tracked_map = {w["address"].lower(): w for w in active_whales}
                 
-                # Engine 1: Global Live Trade Stream
-                await process_global_matches(session, tracked_map, is_first_run=False)
-                
-                # Engine 2: Per-Wallet Event Stream
-                tasks = [process_wallet(session, whale, is_first_run=False) for whale in active_whales]
+                # Parallel Engine Execution (Concurrently fetch global matches & user events in parallel!)
+                tasks = [process_global_matches(session, tracked_map, is_first_run=False)]
+                for whale in active_whales:
+                    tasks.append(process_wallet(session, whale, is_first_run=False))
+                    
                 await asyncio.gather(*tasks, return_exceptions=True)
                 
                 await asyncio.sleep(POLL_INTERVAL)
