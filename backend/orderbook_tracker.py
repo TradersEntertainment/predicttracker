@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
-POLL_INTERVAL = 2
+POLL_INTERVAL = 1.5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -26,6 +26,8 @@ query GetMarketsOrderbook {
         id
         title
         question
+        isTradingEnabled
+        status
         orderbook {
           marketId
           updateTimestampMs
@@ -119,17 +121,27 @@ async def orderbook_tracker_loop():
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
 
-                market_map = {str(m["id"]): m for m in markets}
-
                 for monitor in monitors:
                     min_shares = monitor["min_shares"]
                     target_chat_id = monitor.get("chat_id")
-                    target_market_id = monitor.get("market_id")
+                    target_market_id = (monitor.get("market_id") or "").strip().lower()
 
-                    if target_market_id and target_market_id in market_map:
-                        target_markets = [market_map[target_market_id]]
-                    else:
+                    # Dynamic market selection:
+                    # If market_id is empty or 'auto' -> Scan ALL active markets (includes live 5M & next 5M)!
+                    # If market_id is '5m' or 'btc' -> Scan all 5M Bitcoin markets (current live & upcoming)!
+                    # Otherwise -> Filter by specific market ID/slug keyword.
+                    if not target_market_id or target_market_id == "auto":
                         target_markets = markets
+                    elif target_market_id in ["5m", "btc", "5m_btc"]:
+                        target_markets = [
+                            m for m in markets 
+                            if "5m" in (m.get("title") or "").lower() or "5m" in (m.get("question") or "").lower() or "bitcoin" in (m.get("title") or "").lower()
+                        ]
+                    else:
+                        target_markets = [
+                            m for m in markets 
+                            if target_market_id in str(m.get("id")).lower() or target_market_id in str(m.get("title")).lower()
+                        ]
 
                     for m in target_markets:
                         title = m.get("title") or m.get("question") or "Predict Market"
@@ -138,24 +150,24 @@ async def orderbook_tracker_loop():
                         bids = ob.get("bids") or []
                         asks = ob.get("asks") or []
 
-                        # Check Bids
+                        # Check Bids (Buy Walls)
                         for b in bids:
                             if isinstance(b, list) and len(b) >= 2:
                                 price, shares = float(b[0]), float(b[1])
                                 if shares >= min_shares:
-                                    wall_key = f"{m_id}_BID_{price:.3f}_{int(shares / 100)}"
+                                    wall_key = f"{m_id}_BID_{price:.3f}_{int(shares / 50)}"
                                     if not is_wall_seen(wall_key):
                                         mark_wall_seen(wall_key)
                                         logger.info(f"🧱 BID WALL: {shares} shares @ ${price} in {title}")
                                         msg = format_orderbook_message(title, m_id, "BUY (BID)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
 
-                        # Check Asks
+                        # Check Asks (Sell Walls)
                         for a in asks:
                             if isinstance(a, list) and len(a) >= 2:
                                 price, shares = float(a[0]), float(a[1])
                                 if shares >= min_shares:
-                                    wall_key = f"{m_id}_ASK_{price:.3f}_{int(shares / 100)}"
+                                    wall_key = f"{m_id}_ASK_{price:.3f}_{int(shares / 50)}"
                                     if not is_wall_seen(wall_key):
                                         mark_wall_seen(wall_key)
                                         logger.info(f"🧱 ASK WALL: {shares} shares @ ${price} in {title}")
