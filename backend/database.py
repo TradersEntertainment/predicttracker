@@ -39,6 +39,19 @@ async def init_db():
                 (address.lower(), name, chat_id)
             )
             
+        
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS orderbook_monitors (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            market_id TEXT,
+            min_shares REAL NOT NULL DEFAULT 2000,
+            chat_id TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
         await db.commit()
 
 async def get_whales():
@@ -132,3 +145,38 @@ async def get_whales_cached():
 def invalidate_whales_cache():
     global _whales_cache_ts
     _whales_cache_ts = 0
+
+
+async def get_orderbook_monitors_db():
+    async with get_db() as db:
+        async with db.execute("SELECT id, name, market_id, min_shares, chat_id, status, created_at FROM orderbook_monitors") as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "market_id": row[2],
+                    "min_shares": float(row[3]),
+                    "chat_id": row[4],
+                    "status": row[5],
+                    "created_at": row[6]
+                }
+                for row in rows
+            ]
+
+async def add_orderbook_monitor_db(name: str, market_id: str, min_shares: float, chat_id: str = None):
+    import uuid
+    monitor_id = str(uuid.uuid4())[:8]
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO orderbook_monitors (id, name, market_id, min_shares, chat_id, status) VALUES (?, ?, ?, ?, ?, 'active')",
+            (monitor_id, name, market_id or None, min_shares, chat_id or None)
+        )
+        await db.commit()
+    return monitor_id
+
+async def delete_orderbook_monitor_db(monitor_id: str):
+    async with get_db() as db:
+        await db.execute("DELETE FROM orderbook_monitors WHERE id = ?", (monitor_id,))
+        await db.commit()
+    return True

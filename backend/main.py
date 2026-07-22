@@ -11,34 +11,40 @@ from pydantic import BaseModel
 
 from database import (
     init_db, get_whales, add_whale, remove_whale, 
-    reactivate_whale, delete_whale_permanently, invalidate_whales_cache
+    reactivate_whale, delete_whale_permanently, invalidate_whales_cache,
+    get_orderbook_monitors_db, add_orderbook_monitor_db, delete_orderbook_monitor_db
 )
 from tracker import tracker_loop, scanner_state
 from balance_tracker import balance_tracker_loop, get_all_balances
+from orderbook_tracker import orderbook_tracker_loop, format_orderbook_message
+from bot_engine import send_notification
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting up Predict Whale Tracker...")
+    logger.info("Starting up Predict Whale & Orderbook Tracker...")
     await init_db()
     
     tracker_task = asyncio.create_task(tracker_loop())
     balance_task = asyncio.create_task(balance_tracker_loop())
+    orderbook_task = asyncio.create_task(orderbook_tracker_loop())
     
     yield
     
-    logger.info("Shutting down Predict Whale Tracker...")
+    logger.info("Shutting down Predict Whale & Orderbook Tracker...")
     tracker_task.cancel()
     balance_task.cancel()
+    orderbook_task.cancel()
     try:
         await tracker_task
         await balance_task
+        await orderbook_task
     except asyncio.CancelledError:
         pass
 
-app = FastAPI(title="Predict Whale Tracker API", lifespan=lifespan)
+app = FastAPI(title="Predict Whale & Orderbook Tracker API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,6 +57,12 @@ app.add_middleware(
 class WhaleCreate(BaseModel):
     address: str
     name: str
+    chat_id: Optional[str] = None
+
+class OrderbookMonitorCreate(BaseModel):
+    name: str
+    market_id: Optional[str] = None
+    min_shares: float = 2000.0
     chat_id: Optional[str] = None
 
 @app.get("/api/whales")
@@ -102,6 +114,48 @@ async def api_permanent_remove_whale(address: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/orderbook_monitors")
+async def api_get_orderbook_monitors():
+    try:
+        monitors = await get_orderbook_monitors_db()
+        return {"monitors": monitors}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/orderbook_monitors")
+async def api_add_orderbook_monitor(mon: OrderbookMonitorCreate):
+    try:
+        monitor_id = await add_orderbook_monitor_db(mon.name, mon.market_id, mon.min_shares, mon.chat_id)
+        return {"success": True, "id": monitor_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/orderbook_monitors/{monitor_id}")
+async def api_delete_orderbook_monitor(monitor_id: str):
+    try:
+        await delete_orderbook_monitor_db(monitor_id)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/test_orderbook_telegram")
+async def api_test_orderbook_telegram(payload: dict = None):
+    try:
+        chat_id = (payload or {}).get("chat_id")
+        min_shares = float((payload or {}).get("min_shares") or 2000.0)
+        msg = format_orderbook_message(
+            "Bitcoin Up or Down - 5 Minute (TEST)",
+            "btc-updown-5m-1784715000",
+            "BUY (BID)",
+            0.550,
+            min_shares,
+            min_shares
+        )
+        await send_notification(msg, chat_id=chat_id)
+        return {"success": True, "message": "Orderbook test sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}
@@ -131,7 +185,6 @@ async def api_scanner_status():
 async def api_test_telegram(payload: dict = None):
     try:
         from tracker import fetch_user_events, format_telegram_message
-        from bot_engine import send_notification
         import aiohttp
         
         address = (payload or {}).get("address") or "0x17C99cd6ca9032910de5ccFA2a2FeBCc22319A86"

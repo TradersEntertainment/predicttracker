@@ -25,14 +25,34 @@ interface ScannerStatus {
   last_trade_info?: string;
 }
 
+interface OrderbookMonitor {
+  id: string;
+  name: string;
+  market_id?: string;
+  min_shares: number;
+  chat_id?: string;
+  status: string;
+  created_at: string;
+}
+
 function App() {
   const [whales, setWhales] = useState<Whale[]>([]);
   const [balances, setBalances] = useState<Record<string, BalanceInfo>>({});
   const [scannerInfo, setScannerInfo] = useState<ScannerStatus | null>(null);
+  const [orderbookMonitors, setOrderbookMonitors] = useState<OrderbookMonitor[]>([]);
+  
+  // Whale Form
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
   const [chatId, setChatId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
+  
+  // Orderbook Form
+  const [obName, setObName] = useState('Bitcoin 5M Likidite Duvarı');
+  const [obMinShares, setObMinShares] = useState('2000');
+  const [obMarketId, setObMarketId] = useState('');
+  const [obChatId, setObChatId] = useState('');
+
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
 
   let rawApiBase = (import.meta.env.VITE_API_URL || '').trim();
@@ -71,17 +91,32 @@ function App() {
     }
   };
 
+  const fetchOrderbookMonitors = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/orderbook_monitors`);
+      const data = await response.json();
+      setOrderbookMonitors(data.monitors || []);
+    } catch (e) {
+      console.error('Error fetching orderbook monitors', e);
+    }
+  };
+
   useEffect(() => {
     fetchWhales();
     fetchBalances();
     fetchScannerStatus();
+    fetchOrderbookMonitors();
+
     const whaleInterval = setInterval(fetchWhales, 10000);
     const balanceInterval = setInterval(fetchBalances, 30000);
     const scannerInterval = setInterval(fetchScannerStatus, 5000);
+    const obInterval = setInterval(fetchOrderbookMonitors, 10000);
+
     return () => {
       clearInterval(whaleInterval);
       clearInterval(balanceInterval);
       clearInterval(scannerInterval);
+      clearInterval(obInterval);
     };
   }, []);
 
@@ -121,6 +156,69 @@ function App() {
       }
     } catch (e) {
       showToast('Bağlantı hatası!');
+    }
+  };
+
+  const handleAddOrderbookMonitor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!obName || !obMinShares) {
+      showToast('Lütfen etiket ve min shares miktarını doldurun!');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/orderbook_monitors`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: obName,
+          market_id: obMarketId || null,
+          min_shares: parseFloat(obMinShares) || 2000,
+          chat_id: obChatId || null
+        })
+      });
+
+      if (response.ok) {
+        setObMarketId('');
+        showToast('Orderbook likidite takibi başlatıldı! 🧱');
+        fetchOrderbookMonitors();
+      } else {
+        const error = await response.json();
+        showToast(`Hata: ${error.detail || 'Eklenemedi'}`);
+      }
+    } catch (e) {
+      showToast('Bağlantı hatası!');
+    }
+  };
+
+  const handleDeleteOrderbookMonitor = async (id: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/orderbook_monitors/${id}`, { method: 'DELETE' });
+      if (response.ok) {
+        showToast('Orderbook takibi kaldırıldı.');
+        fetchOrderbookMonitors();
+      }
+    } catch (e) {
+      showToast('Hata oluştu!');
+    }
+  };
+
+  const handleTestOrderbookTelegram = async () => {
+    try {
+      showToast('Orderbook test bildirimi gönderiliyor... 🧪');
+      const response = await fetch(`${API_BASE}/api/test_orderbook_telegram`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: obChatId || null, min_shares: parseFloat(obMinShares) || 2000 })
+      });
+      if (response.ok) {
+        showToast('✅ Orderbook test bildirimi gönderildi! Telegramınızı kontrol edin.');
+      } else {
+        const error = await response.json();
+        showToast(`⚠️ Hata: ${error.detail || 'Bildirim gönderilemedi'}`);
+      }
+    } catch (e) {
+      showToast('⚠️ Bağlantı hatası!');
     }
   };
 
@@ -225,8 +323,8 @@ function App() {
   return (
     <div className="container">
       <header className="header">
-        <h1 className="gradient-text">Predict Whale Tracker</h1>
-        <p>Predict.fun'daki balinaların cüzdan hareketlerini canlı takip edin</p>
+        <h1 className="gradient-text">Predict Whale & Orderbook Tracker</h1>
+        <p>Predict.fun balinalarını ve Orderbook likidite duvarlarını (2000+ Shares) canlı takip edin</p>
         
         {/* Scanner Live Status Bar */}
         <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'center', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -239,7 +337,7 @@ function App() {
             className="btn btn-primary"
             style={{ padding: '8px 18px', fontSize: '0.85rem' }}
           >
-            Telegram Test Bildirimi Gönder 🧪
+            Balina Telegram Testi 🧪
           </button>
         </div>
       </header>
@@ -267,6 +365,93 @@ function App() {
           )}
         </div>
       )}
+
+      {/* Orderbook Liquidity Wall Section */}
+      <div className="glass-panel" style={{ marginBottom: '30px', border: '1px solid rgba(0, 240, 255, 0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <h2>🧱 Orderbook / Likidite Duvarı Takibi (2000+ Shares)</h2>
+          <button 
+            onClick={handleTestOrderbookTelegram} 
+            className="btn btn-sm"
+            style={{ background: 'rgba(0, 240, 255, 0.15)', color: '#00f0ff', border: '1px solid rgba(0, 240, 255, 0.3)' }}
+          >
+            Orderbook Telegram Testi Gönder 🧪
+          </button>
+        </div>
+        
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '5px' }}>
+          Predict.fun orderbook'una tek bir fiyatta belirlediğiniz miktarda (Örn: 2000 - 3000 shares) alım veya satım emri koyulduğunda anında bildirim gönderir.
+        </p>
+
+        <form onSubmit={handleAddOrderbookMonitor} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginTop: '20px' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Takip İsmi / Etiket</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Örn: Bitcoin 5M Likidite Duvarı"
+              value={obName}
+              onChange={(e) => setObName(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Min Shares Eşiği (Adet)</label>
+            <input
+              type="number"
+              className="input-field"
+              placeholder="Örn: 2000"
+              value={obMinShares}
+              onChange={(e) => setObMinShares(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Telegram Chat ID (Bu Grup İçin Özel)</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Örn: -100123456789"
+              value={obChatId}
+              onChange={(e) => setObChatId(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Market ID veya Link (Opsiyonel)</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Boş bırakılırsa TÜM marketleri tarar"
+              value={obMarketId}
+              onChange={(e) => setObMarketId(e.target.value)}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px' }}>
+              Orderbook Takibini Başlat 🧱
+            </button>
+          </div>
+        </form>
+
+        {/* Active Orderbook Monitors List */}
+        {orderbookMonitors.length > 0 && (
+          <div style={{ marginTop: '20px' }}>
+            <h4 style={{ color: 'var(--text-secondary)', marginBottom: '10px' }}>Aktif Orderbook Takipleri ({orderbookMonitors.length})</h4>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {orderbookMonitors.map((m) => (
+                <div key={m.id} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '10px 15px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '15px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                  <div>
+                    <strong style={{ color: '#00f0ff', fontSize: '0.9rem' }}>{m.name}</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      Eşik: <span style={{ color: '#00ff88' }}>{m.min_shares}+ Shares</span>
+                      {m.chat_id ? ` | Chat ID: ${m.chat_id}` : ' | Varsayılan Telegram'}
+                    </div>
+                  </div>
+                  <button onClick={() => handleDeleteOrderbookMonitor(m.id)} className="btn btn-danger btn-sm" style={{ padding: '4px 10px' }}>Sil 🗑️</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="dashboard-grid">
         {/* Left Column: Form */}
