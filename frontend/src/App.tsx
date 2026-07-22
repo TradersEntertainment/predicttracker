@@ -1,0 +1,376 @@
+import React, { useState, useEffect } from 'react';
+import './index.css';
+
+interface Whale {
+  id: string;
+  address: string;
+  name: string;
+  addedAt: string;
+  status: 'tracking' | 'paused';
+  chat_id?: string;
+}
+
+interface BalanceInfo {
+  usdc_balance: number;
+  portfolio_value: number;
+  last_updated: number;
+  nickname: string;
+}
+
+function App() {
+  const [whales, setWhales] = useState<Whale[]>([]);
+  const [balances, setBalances] = useState<Record<string, BalanceInfo>>({});
+  const [address, setAddress] = useState('');
+  const [name, setName] = useState('');
+  const [chatId, setChatId] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
+
+  const API_BASE = import.meta.env.VITE_API_URL || '';
+
+  const fetchWhales = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/whales`);
+      const data = await response.json();
+      setWhales(data.whales || []);
+    } catch (e) {
+      console.error('Error fetching whales', e);
+    }
+  };
+
+  const fetchBalances = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/balances`);
+      const data = await response.json();
+      setBalances(data.balances || {});
+    } catch (e) {
+      console.error('Error fetching balances', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchWhales();
+    fetchBalances();
+    const whaleInterval = setInterval(fetchWhales, 10000);
+    const balanceInterval = setInterval(fetchBalances, 30000);
+    return () => {
+      clearInterval(whaleInterval);
+      clearInterval(balanceInterval);
+    };
+  }, []);
+
+  const showToast = (message: string) => {
+    setToast({ message, visible: true });
+    setTimeout(() => setToast({ message: '', visible: false }), 3000);
+  };
+
+  const handleAddWhale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!address || !name) {
+      showToast('Lütfen tüm alanları doldurun!');
+      return;
+    }
+
+    if (!address.startsWith('0x') || address.length !== 42) {
+      showToast('Geçerli bir cüzdan adresi girin (0x...)');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE}/api/whales`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, name, chat_id: chatId || null })
+      });
+      
+      if (response.ok) {
+        setAddress('');
+        setName('');
+        setChatId('');
+        showToast(`${name} başarıyla eklendi!`);
+        fetchWhales();
+      } else {
+        const error = await response.json();
+        showToast(`Hata: ${error.detail || 'Eklenemedi'}`);
+      }
+    } catch (e) {
+      showToast('Bağlantı hatası!');
+    }
+  };
+
+  const handleRemove = async (addressToRemove: string, name: string) => {
+    const confirmed = window.confirm(`"${name}" isimli balinanın takibini durdurmak istediğinize emin misiniz?`);
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/whales/${addressToRemove}`, { method: 'DELETE' });
+      if (response.ok) {
+        showToast('Balina takibi durduruldu.');
+        fetchWhales();
+      }
+    } catch (e) {
+      showToast('Hata oluştu!');
+    }
+  };
+
+  const handleReactivate = async (addressToReactivate: string, name: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/whales/${addressToReactivate}/reactivate`, { method: 'POST' });
+      if (response.ok) {
+        showToast(`"${name}" yeniden aktif takibe alındı! 🐋`);
+        fetchWhales();
+      }
+    } catch (e) {
+      showToast('Hata oluştu!');
+    }
+  };
+
+  const handleRemovePermanent = async (addressToRemove: string, name: string) => {
+    const confirmed = window.confirm(`"${name}" isimli balinayı TAMAMEN silmek istediğinize emin misiniz?`);
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/whales/${addressToRemove}/permanent`, { method: 'DELETE' });
+      if (response.ok) {
+        showToast('Balina tamamen silindi.');
+        fetchWhales();
+      }
+    } catch (e) {
+      showToast('Hata oluştu!');
+    }
+  };
+
+  const truncateAddress = (addr: string): string => {
+    if (!addr) return '';
+    return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`;
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    showToast('Cüzdan adresi kopyalandı! 📋');
+  };
+
+  const formatBalance = (value: number): string => {
+    if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+    return `$${value.toFixed(2)}`;
+  };
+
+  const getBalanceClass = (usdt: number, portfolio: number): string => {
+    const total = usdt + portfolio;
+    if (total < 1000) return 'balance-danger';
+    if (total < 5000) return 'balance-warning';
+    return 'balance-ok';
+  };
+
+  const activeWhalesList = whales.filter(w => w.status !== 'paused');
+  const pausedWhales = whales.filter(w => w.status === 'paused');
+
+  const activeBalances = Object.entries(balances)
+    .filter(([addr]) => whales.some(w => w.address.toLowerCase() === addr.toLowerCase() && w.status !== 'paused'))
+    .map(([, b]) => b);
+
+  const totalUSDC = activeBalances.reduce((sum, b) => sum + (b.usdc_balance || 0), 0);
+  const totalPortfolio = activeBalances.reduce((sum, b) => sum + (b.portfolio_value || 0), 0);
+  const lowBalanceCount = activeBalances.filter(b => ((b.usdc_balance || 0) + (b.portfolio_value || 0)) < 1000).length;
+
+  const filteredActive = activeWhalesList.filter(w => 
+    w.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    w.address.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  return (
+    <div className="container">
+      <header className="header">
+        <h1 className="gradient-text">Predict Whale Tracker</h1>
+        <p>Predict.fun'daki balinaların cüzdan hareketlerini canlı takip edin</p>
+      </header>
+
+      {/* Stats Bar */}
+      {Object.keys(balances).length > 0 && (
+        <div className="stats-bar">
+          <div className="stat-item">
+            <span className="stat-label">Toplam Bakiye (USDT/USDC)</span>
+            <span className="stat-value cyan">{formatBalance(totalUSDC)}</span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-label">Toplam Portfolio</span>
+            <span className="stat-value purple">{formatBalance(totalPortfolio)}</span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-label">Takip Edilen</span>
+            <span className="stat-value">{activeWhalesList.length} 🐋</span>
+          </div>
+          {lowBalanceCount > 0 && (
+            <div className="stat-item warning">
+              <span className="stat-label">Düşük Bakiye</span>
+              <span className="stat-value red">{lowBalanceCount} ⚠️</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="dashboard-grid">
+        {/* Left Column: Form */}
+        <div className="glass-panel">
+          <h2>Yeni Balina Ekle</h2>
+          <form onSubmit={handleAddWhale} style={{ marginTop: '20px' }}>
+            <div className="form-group">
+              <label>Cüzdan Adresi</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="0x17C99..."
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Balina İsmi / Etiket</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="Örn: Big Trader"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>Telegram Chat ID (Opsiyonel)</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="Örn: -100123456789"
+                value={chatId}
+                onChange={(e) => setChatId(e.target.value)}
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+              Balinayı Takibe Al 🚀
+            </button>
+          </form>
+        </div>
+
+        {/* Right Column: List & Balances */}
+        <div className="glass-panel">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h2>Takip Edilen Balinalar ({filteredActive.length})</h2>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Ara (İsim veya Adres)..."
+              style={{ width: '250px', padding: '8px 14px' }}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div className="whale-list">
+            {filteredActive.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '30px' }}>
+                Takip edilen balina bulunamadı.
+              </p>
+            ) : (
+              filteredActive.map((w) => {
+                const bal = balances[w.address.toLowerCase()] || balances[w.address];
+                const usdt = bal?.usdc_balance || 0;
+                const port = bal?.portfolio_value || 0;
+                const total = usdt + port;
+                const balClass = getBalanceClass(usdt, port);
+
+                return (
+                  <div key={w.address} className="whale-card">
+                    <div className="whale-info">
+                      <div className="whale-header">
+                        <span className="whale-name">{w.name}</span>
+                        <span className="badge badge-success">Takipte</span>
+                      </div>
+                      <div className="whale-address" onClick={() => copyToClipboard(w.address)}>
+                        {truncateAddress(w.address)} 📋
+                      </div>
+                    </div>
+
+                    <div className="balance-box">
+                      <div className={`balance-badge ${balClass}`}>
+                        <span className="balance-title">Toplam</span>
+                        <span className="balance-amount">{formatBalance(total)}</span>
+                      </div>
+                      <div className="balance-details">
+                        <span>Cüzdan: {formatBalance(usdt)}</span>
+                        <span>Portfolio: {formatBalance(port)}</span>
+                      </div>
+                    </div>
+
+                    <div className="whale-actions">
+                      <a
+                        href={`https://predict.fun/portfolio/${w.address}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-icon"
+                        title="Predict.fun Profili"
+                      >
+                        🎯
+                      </a>
+                      <a
+                        href={`https://bscscan.com/address/${w.address}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn-icon"
+                        title="BscScan Explorer"
+                      >
+                        🔍
+                      </a>
+                      <button
+                        onClick={() => handleRemove(w.address, w.name)}
+                        className="btn btn-danger btn-sm"
+                        title="Takibi Durdur"
+                      >
+                        Duraklat
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Paused Section */}
+          {pausedWhales.length > 0 && (
+            <div style={{ marginTop: '40px' }}>
+              <h3 style={{ color: 'var(--text-secondary)', marginBottom: '15px' }}>
+                Duraklatılmış Balinalar ({pausedWhales.length})
+              </h3>
+              <div className="whale-list">
+                {pausedWhales.map((w) => (
+                  <div key={w.address} className="whale-card paused">
+                    <div className="whale-info">
+                      <span className="whale-name">{w.name}</span>
+                      <span className="whale-address">{truncateAddress(w.address)}</span>
+                    </div>
+                    <div className="whale-actions">
+                      <button
+                        onClick={() => handleReactivate(w.address, w.name)}
+                        className="btn btn-primary btn-sm"
+                      >
+                        Tekrar Takibe Al 🔄
+                      </button>
+                      <button
+                        onClick={() => handleRemovePermanent(w.address, w.name)}
+                        className="btn btn-danger btn-sm"
+                      >
+                        Sil 🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Toast notification */}
+      {toast.visible && <div className="toast-notification">{toast.message}</div>}
+    </div>
+  );
+}
+
+export default App;
