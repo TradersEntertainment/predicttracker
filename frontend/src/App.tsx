@@ -17,9 +17,18 @@ interface BalanceInfo {
   nickname: string;
 }
 
+interface ScannerStatus {
+  status: string;
+  last_scan_time: number;
+  seconds_since_last_scan: number;
+  total_scans_count: number;
+  last_trade_info?: string;
+}
+
 function App() {
   const [whales, setWhales] = useState<Whale[]>([]);
   const [balances, setBalances] = useState<Record<string, BalanceInfo>>({});
+  const [scannerInfo, setScannerInfo] = useState<ScannerStatus | null>(null);
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
   const [chatId, setChatId] = useState('');
@@ -52,14 +61,27 @@ function App() {
     }
   };
 
+  const fetchScannerStatus = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/scanner_status`);
+      const data = await response.json();
+      setScannerInfo(data);
+    } catch (e) {
+      console.error('Error fetching scanner status', e);
+    }
+  };
+
   useEffect(() => {
     fetchWhales();
     fetchBalances();
+    fetchScannerStatus();
     const whaleInterval = setInterval(fetchWhales, 10000);
     const balanceInterval = setInterval(fetchBalances, 30000);
+    const scannerInterval = setInterval(fetchScannerStatus, 5000);
     return () => {
       clearInterval(whaleInterval);
       clearInterval(balanceInterval);
+      clearInterval(scannerInterval);
     };
   }, []);
 
@@ -205,13 +227,19 @@ function App() {
       <header className="header">
         <h1 className="gradient-text">Predict Whale Tracker</h1>
         <p>Predict.fun'daki balinaların cüzdan hareketlerini canlı takip edin</p>
-        <div style={{ marginTop: '15px' }}>
+        
+        {/* Scanner Live Status Bar */}
+        <div style={{ marginTop: '15px', display: 'flex', justifyContent: 'center', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ background: 'rgba(0, 255, 136, 0.1)', border: '1px solid rgba(0, 255, 136, 0.3)', color: '#00ff88', padding: '6px 16px', borderRadius: '20px', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00ff88', boxShadow: '0 0 10px #00ff88' }}></span>
+            Canlı Tarayıcı Aktif {scannerInfo && scannerInfo.seconds_since_last_scan >= 0 ? `(Son tarama: ${scannerInfo.seconds_since_last_scan}s önce | ${scannerInfo.total_scans_count} tarama)` : ''}
+          </div>
           <button 
             onClick={() => handleTestTelegram()} 
             className="btn btn-primary"
-            style={{ padding: '10px 20px', fontSize: '0.9rem' }}
+            style={{ padding: '8px 18px', fontSize: '0.85rem' }}
           >
-            Telegram Bildirim Testi Gönder 🧪
+            Telegram Test Bildirimi Gönder 🧪
           </button>
         </div>
       </header>
@@ -279,6 +307,10 @@ function App() {
               Balinayı Takibe Al 🚀
             </button>
           </form>
+
+          <div style={{ marginTop: '20px', padding: '12px', background: 'rgba(255, 255, 255, 0.03)', borderRadius: '10px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+            💡 <b>Bilgi:</b> Sistem her 5 saniyede bir Predict.fun GraphQL altyapısını taramaktadır. Balina yeni bir alım veya satım yaptığı anda otomatik bildirim Telegram'a düşer.
+          </div>
         </div>
 
         {/* Right Column: List & Balances */}

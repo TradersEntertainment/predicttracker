@@ -13,7 +13,7 @@ from database import (
     init_db, get_whales, add_whale, remove_whale, 
     reactivate_whale, delete_whale_permanently, invalidate_whales_cache
 )
-from tracker import tracker_loop
+from tracker import tracker_loop, scanner_state
 from balance_tracker import balance_tracker_loop, get_all_balances
 
 logging.basicConfig(level=logging.INFO)
@@ -113,6 +113,19 @@ async def api_get_balances():
         return {"balances": balances}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/scanner_status")
+async def api_scanner_status():
+    import time
+    last_scan = scanner_state.get("last_scan_time", 0)
+    seconds_ago = int(time.time() - last_scan) if last_scan > 0 else -1
+    return {
+        "status": scanner_state.get("status", "unknown"),
+        "last_scan_time": last_scan,
+        "seconds_since_last_scan": seconds_ago,
+        "total_scans_count": scanner_state.get("scans_count", 0),
+        "last_trade_info": scanner_state.get("last_trade_info")
+    }
 
 @app.post("/api/test_telegram")
 async def api_test_telegram(payload: dict = None):

@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
 POLL_INTERVAL = 5
 
+# Global scanner status state
+scanner_state = {
+    "last_scan_time": 0,
+    "scans_count": 0,
+    "last_trade_time": 0,
+    "last_trade_info": None,
+    "status": "starting"
+}
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json",
@@ -146,7 +155,7 @@ async def fetch_user_events(session: aiohttp.ClientSession, address: str):
         logger.error(f"Fetch error for {address}: {e}")
         return None
 
-async def process_wallet(session: aiohttp.ClientSession, whale: dict):
+async def process_wallet(session: aiohttp.ClientSession, whale: dict, is_first_run: bool = False):
     address = whale['address']
     nickname = whale.get('name')
     
@@ -166,7 +175,20 @@ async def process_wallet(session: aiohttp.ClientSession, whale: dict):
     if not new_events:
         return
         
-    logger.info(f"⚡ {len(new_events)} new events for {nickname} ({address[:6]}...)")
+    # If it is first run and database was empty, seed old trades to memory so old history is not spammed
+    if is_first_run:
+        logger.info(f"🌱 Seeding {len(new_events)} historical trades into memory for {nickname}")
+        db_records = []
+        for ev in new_events:
+            tx_hash = ev.get("transactionHash")
+            mark_activity_seen_fast(address, tx_hash)
+            db_records.append((address, tx_hash, ev.get("timestamp")))
+        await batch_record_activities(db_records)
+        return
+        
+    logger.info(f"⚡ {len(new_events)} NEW trades detected for {nickname} ({address[:6]}...)")
+    scanner_state["last_trade_time"] = time.time()
+    scanner_state["last_trade_info"] = f"{nickname}: {new_events[0].get('transactionHash')[:10]}"
     
     db_records = []
     for ev in reversed(new_events):
@@ -185,23 +207,21 @@ async def tracker_loop():
     logger.info("Predict.fun Tracker loop started")
     count = await load_seen_cache()
     logger.info(f"📦 Loaded {count} seen tx hashes into memory cache")
+    scanner_state["status"] = "active"
     
     connector = aiohttp.TCPConnector(limit=50, enable_cleanup_closed=True)
     timeout = aiohttp.ClientTimeout(total=10)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=HEADERS) as session:
+        # --- FIRST RUN SEEDING ---
+        is_first_run = (count == 0)
         try:
             whales = await get_whales_cached()
             active_whales = [w for w in whales if w.get('status', 'tracking') == 'tracking']
             if active_whales:
-                first_whale = active_whales[0]
-                events = await fetch_user_events(session, first_whale['address'])
-                if events and len(events) > 0:
-                    last_ev = events[0]
-                    msg = format_telegram_message(first_whale['address'], last_ev, first_whale.get('name'))
-                    await send_notification(f"✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina takipte\n📦 {count} kayıtlı işlem hafızada\n⏱ Tarama aralığı: {POLL_INTERVAL}s\n\nSon işlem örneği:\n{msg}")
-                else:
-                    await send_notification(f"✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina takipte\nBağlantı başarılı ancak henüz işlem bulunamadı.")
+                for w in active_whales:
+                    await process_wallet(session, w, is_first_run=is_first_run)
+                await send_notification(f"✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina canlı takipte\n📦 {count} kayıtlı işlem hafızada\n⏱ Tarama aralığı: {POLL_INTERVAL}s (Yeni alım/satım anında Telegrama düşer)")
             else:
                 await send_notification("✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\nLütfen takip için aktif bir cüzdan adresi ekleyin.")
         except Exception as e:
@@ -210,17 +230,21 @@ async def tracker_loop():
         
         while True:
             try:
+                scanner_state["last_scan_time"] = time.time()
+                scanner_state["scans_count"] += 1
+                
                 whales = await get_whales_cached()
                 active_whales = [w for w in whales if w.get('status', 'tracking') == 'tracking']
                 if not active_whales:
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
 
-                tasks = [process_wallet(session, whale) for whale in active_whales]
+                tasks = [process_wallet(session, whale, is_first_run=False) for whale in active_whales]
                 await asyncio.gather(*tasks, return_exceptions=True)
                 
                 await asyncio.sleep(POLL_INTERVAL)
             except asyncio.CancelledError:
+                scanner_state["status"] = "stopped"
                 break
             except Exception as e:
                 logger.error(f"Tracker loop error: {e}")
