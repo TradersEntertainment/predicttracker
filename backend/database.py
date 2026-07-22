@@ -1,7 +1,13 @@
 import aiosqlite
 import os
 
-DB_PATH = "data/balina.db"
+# Check if Railway Volume is mounted at /data or custom DATABASE_PATH env var
+if os.getenv("DATABASE_PATH"):
+    DB_PATH = os.getenv("DATABASE_PATH")
+elif os.path.exists("/data") and os.access("/data", os.W_OK):
+    DB_PATH = "/data/balina.db"
+else:
+    DB_PATH = "data/balina.db"
 
 INITIAL_WHALES = [
     ("0x17c99cd6ca9032910de5ccfa2a2febcc22319a86", "Predict Balina 1", None),
