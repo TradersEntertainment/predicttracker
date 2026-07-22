@@ -139,10 +139,12 @@ async def orderbook_tracker_loop():
                         bids = ob.get("bids") or []
                         asks = ob.get("asks") or []
 
-                        # Check Bids (Buy Walls)
+                        # Check Bids (Buy Walls) - Ignore extreme bond prices (< 0.05 or > 0.95)
                         for b in bids:
                             if isinstance(b, list) and len(b) >= 2:
                                 price, shares = float(b[0]), float(b[1])
+                                if price < 0.05 or price > 0.95:
+                                    continue
                                 if shares >= min_shares:
                                     wall_key = f"{m_id}_BID_{price:.3f}_{int(shares / 50)}"
                                     if not is_wall_seen(wall_key):
@@ -151,10 +153,12 @@ async def orderbook_tracker_loop():
                                         msg = format_orderbook_message(title, m_id, "BUY (BID)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
 
-                        # Check Asks (Sell Walls)
+                        # Check Asks (Sell Walls) - Ignore extreme bond prices (< 0.05 or > 0.95)
                         for a in asks:
                             if isinstance(a, list) and len(a) >= 2:
                                 price, shares = float(a[0]), float(a[1])
+                                if price < 0.05 or price > 0.95:
+                                    continue
                                 if shares >= min_shares:
                                     wall_key = f"{m_id}_ASK_{price:.3f}_{int(shares / 50)}"
                                     if not is_wall_seen(wall_key):

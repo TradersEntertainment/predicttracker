@@ -380,7 +380,7 @@ function App() {
         </div>
         
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '5px' }}>
-          Predict.fun orderbook'una tek bir fiyatta belirlediğiniz miktarda (Örn: 2000 - 3000 shares) alım veya satım emri koyulduğunda anında bildirim gönderir.
+          Predict.fun orderbook'una tek bir fiyatta ($0.05 ile $0.95 arasındaki aktif fiyatlarda) belirlediğiniz miktarda (Örn: 2000 - 3000 shares) alım veya satım emri koyulduğunda anında bildirim gönderir. Extreme bond emirleri ($0.05 altı ve $0.95 üstü) Otomatik Filtrelenir.
         </p>
 
         <form onSubmit={handleAddOrderbookMonitor} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginTop: '20px' }}>
