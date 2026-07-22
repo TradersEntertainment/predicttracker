@@ -58,6 +58,12 @@ async def init_db():
         )
         """)
 
+        
+        await db.execute("""
+        INSERT OR IGNORE INTO orderbook_monitors (id, name, market_id, min_shares, chat_id, status)
+        VALUES ('default_auto', 'Bitcoin 5M Likidite Duvarı (Otomatik)', NULL, 2000, NULL, 'active')
+        """)
+
         await db.commit()
 
 async def get_whales():

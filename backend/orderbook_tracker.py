@@ -85,10 +85,20 @@ async def fetch_markets_orderbook(session: aiohttp.ClientSession):
 async def get_active_orderbook_monitors():
     try:
         monitors = await get_orderbook_monitors_db()
-        return [m for m in monitors if m.get("status", "active") == "active"]
+        active = [m for m in monitors if m.get("status", "active") == "active"]
+        if active:
+            return active
     except Exception as e:
         logger.error(f"Error fetching orderbook monitors: {e}")
-        return []
+
+    # Fallback to 100% automatic scanning mode out of the box (2000+ shares)
+    return [{
+        "id": "default_auto",
+        "name": "Bitcoin 5M Likidite Duvarı (Otomatik)",
+        "market_id": None,
+        "min_shares": 2000.0,
+        "chat_id": None
+    }]
 
 async def orderbook_tracker_loop():
     logger.info("Orderbook Liquidity Wall Tracker loop started")

@@ -380,7 +380,7 @@ function App() {
         </div>
         
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '5px' }}>
-          Predict.fun orderbook'una tek bir fiyatta ($0.05 ile $0.95 arasındaki aktif fiyatlarda) belirlediğiniz miktarda (Örn: 2000 - 3000 shares) alım veya satım emri koyulduğunda anında bildirim gönderir. Extreme bond emirleri ($0.05 altı ve $0.95 üstü) Otomatik Filtrelenir.
+          ✨ 24/7 Otomatik Orderbook Taraması Aktif! Hiçbir butona basmanıza gerek yoktur. Sistem arka planda tüm 5M ve canlı marketlerdeki 2000+ shares alım/satım duvarlarını ($0.05 - $0.95 aktif aralığında) otomatik tarayıp bildirim atar.
         </p>
 
         <form onSubmit={handleAddOrderbookMonitor} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginTop: '20px' }}>
@@ -426,7 +426,7 @@ function App() {
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end' }}>
             <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px' }}>
-              Orderbook Takibini Başlat 🧱
+              Özel Takip Ekle 🧱
             </button>
           </div>
         </form>
