@@ -2,7 +2,7 @@ import asyncio
 import time
 import aiohttp
 import logging
-from database import get_db
+from database import get_orderbook_monitors_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -84,19 +84,8 @@ async def fetch_markets_orderbook(session: aiohttp.ClientSession):
 
 async def get_active_orderbook_monitors():
     try:
-        async with get_db() as db:
-            async with db.execute("SELECT id, name, market_id, min_shares, chat_id, status FROM orderbook_monitors WHERE status = 'active'") as cursor:
-                rows = await cursor.fetchall()
-                return [
-                    {
-                        "id": row[0],
-                        "name": row[1],
-                        "market_id": row[2],
-                        "min_shares": float(row[3]),
-                        "chat_id": row[4]
-                    }
-                    for row in rows
-                ]
+        monitors = await get_orderbook_monitors_db()
+        return [m for m in monitors if m.get("status", "active") == "active"]
     except Exception as e:
         logger.error(f"Error fetching orderbook monitors: {e}")
         return []
