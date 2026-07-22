@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
 POLL_INTERVAL = 5
 
-# Global scanner status state
 scanner_state = {
     "last_scan_time": 0,
     "scans_count": 0,
@@ -33,12 +32,41 @@ HEADERS = {
     "Referer": "https://predict.fun/"
 }
 
-GRAPHQL_QUERY = """
+QUERY_GLOBAL_MATCHES = """
+query GetGlobalMatchEvents {
+  matchEventLog(pagination: { first: 50 }) {
+    edges {
+      node {
+        timestamp
+        transactionHash
+        priceExecuted
+        amountFilled
+        quoteType
+        account {
+          address
+          name
+        }
+        market {
+          id
+          title
+          question
+        }
+        outcome {
+          index
+          name
+        }
+      }
+    }
+  }
+}
+"""
+
+QUERY_USER_ORDERS_LOG = """
 query GetUserActivity($address: Address!) {
   account(address: $address) {
     address
     name
-    ordersEventLog {
+    ordersEventLog(pagination: { first: 20 }) {
       edges {
         node {
           event
@@ -68,15 +96,18 @@ query GetUserActivity($address: Address!) {
 }
 """
 
+def build_event_key(wallet: str, tx_hash: str, order_id: str, timestamp: str, price: str, amount: str) -> str:
+    return f"{wallet.lower()}_{tx_hash or 'notx'}_{order_id or 'noorder'}_{timestamp or 'notime'}_{price or '0'}_{amount or '0'}"
+
 def format_telegram_message(wallet: str, event_node: dict, nickname: str = None) -> str:
     order = event_node.get("order") or {}
     market = event_node.get("market") or {}
     outcome = event_node.get("outcome") or {}
     
-    quote_type = str(order.get("quoteType") or "").upper()
-    if quote_type == "BID":
+    quote_type = str(event_node.get("quoteType") or order.get("quoteType") or "").upper()
+    if quote_type in ["BID", "BUY"]:
         side = "BUY"
-    elif quote_type == "ASK":
+    elif quote_type in ["ASK", "SELL"]:
         side = "SELL"
     else:
         side = quote_type or "TRADE"
@@ -128,83 +159,113 @@ def format_telegram_message(wallet: str, event_node: dict, nickname: str = None)
 
     return msg
 
-async def fetch_user_events(session: aiohttp.ClientSession, address: str):
-    payload = {
-        "query": GRAPHQL_QUERY,
-        "variables": {"address": address}
-    }
+async def fetch_global_matches(session: aiohttp.ClientSession):
+    payload = {"query": QUERY_GLOBAL_MATCHES}
     try:
-        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=10) as response:
-            if response.status == 200:
-                data = await response.json()
-                data_obj = data.get("data") or {}
-                account = data_obj.get("account") or {}
-                orders_log = account.get("ordersEventLog") or {}
-                edges = orders_log.get("edges") or []
-                events = []
-                for edge in edges:
-                    if isinstance(edge, dict):
-                        node = edge.get("node")
-                        if node and isinstance(node, dict) and node.get("transactionHash"):
-                            events.append(node)
-                return events
-            else:
-                logger.error(f"GraphQL returned HTTP {response.status} for {address}")
-                return None
+        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                edges = (data.get("data") or {}).get("matchEventLog", {}).get("edges") or []
+                return [e.get("node") for e in edges if isinstance(e, dict) and e.get("node")]
     except Exception as e:
-        logger.error(f"Fetch error for {address}: {e}")
-        return None
+        logger.error(f"Fetch global matches error: {e}")
+    return []
+
+async def fetch_user_events(session: aiohttp.ClientSession, address: str):
+    payload = {"query": QUERY_USER_ORDERS_LOG, "variables": {"address": address}}
+    try:
+        async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=8) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                account = (data.get("data") or {}).get("account") or {}
+                edges = (account.get("ordersEventLog") or {}).get("edges") or []
+                return [e.get("node") for e in edges if isinstance(e, dict) and e.get("node")]
+    except Exception as e:
+        logger.error(f"Fetch user events error for {address}: {e}")
+    return []
+
+async def process_global_matches(session: aiohttp.ClientSession, tracked_map: dict, is_first_run: bool = False):
+    matches = await fetch_global_matches(session)
+    if not matches:
+        return
+        
+    db_records = []
+    for node in reversed(matches):
+        account_info = node.get("account") or {}
+        addr = account_info.get("address", "").lower()
+        if addr in tracked_map:
+            whale = tracked_map[addr]
+            nickname = whale.get("name")
+            tx_hash = node.get("transactionHash") or ""
+            price = str(node.get("priceExecuted") or "0")
+            amount = str(node.get("amountFilled") or "0")
+            timestamp = str(node.get("timestamp") or "")
+            event_key = build_event_key(addr, tx_hash, "match", timestamp, price, amount)
+            
+            if is_activity_seen_fast(addr, event_key):
+                continue
+                
+            if is_first_run:
+                mark_activity_seen_fast(addr, event_key)
+                db_records.append((addr, event_key, timestamp))
+                continue
+                
+            logger.info(f"⚡ [GLOBAL MATCH] New trade for {nickname} ({addr[:6]}...)")
+            scanner_state["last_trade_time"] = time.time()
+            scanner_state["last_trade_info"] = f"{nickname}: {tx_hash[:10]}"
+            try:
+                msg = format_telegram_message(addr, node, nickname)
+                await send_notification(msg, chat_id=whale.get("chat_id"))
+                mark_activity_seen_fast(addr, event_key)
+                db_records.append((addr, event_key, timestamp))
+            except Exception as e:
+                logger.error(f"Error processing global match trade {tx_hash}: {e}")
+                
+    if db_records:
+        await batch_record_activities(db_records)
 
 async def process_wallet(session: aiohttp.ClientSession, whale: dict, is_first_run: bool = False):
-    address = whale['address']
-    nickname = whale.get('name')
+    address = whale["address"]
+    nickname = whale.get("name")
     
     events = await fetch_user_events(session, address)
     if not events:
         return
-    
-    new_events = []
-    for ev in events:
-        tx_hash = ev.get("transactionHash")
-        if not tx_hash:
-            continue
-        if is_activity_seen_fast(address, tx_hash):
-            continue
-        new_events.append(ev)
         
-    if not new_events:
-        return
-        
-    # If it is first run and database was empty, seed old trades to memory so old history is not spammed
-    if is_first_run:
-        logger.info(f"🌱 Seeding {len(new_events)} historical trades into memory for {nickname}")
-        db_records = []
-        for ev in new_events:
-            tx_hash = ev.get("transactionHash")
-            mark_activity_seen_fast(address, tx_hash)
-            db_records.append((address, tx_hash, ev.get("timestamp")))
-        await batch_record_activities(db_records)
-        return
-        
-    logger.info(f"⚡ {len(new_events)} NEW trades detected for {nickname} ({address[:6]}...)")
-    scanner_state["last_trade_time"] = time.time()
-    scanner_state["last_trade_info"] = f"{nickname}: {new_events[0].get('transactionHash')[:10]}"
-    
     db_records = []
-    for ev in reversed(new_events):
-        try:
-            tx_hash = ev.get("transactionHash")
-            msg = format_telegram_message(address, ev, nickname)
-            await send_notification(msg, chat_id=whale.get('chat_id'))
-            mark_activity_seen_fast(address, tx_hash)
-            db_records.append((address, tx_hash, ev.get("timestamp")))
-        except Exception as e:
-            logger.error(f"Error processing trade {ev.get('transactionHash')}: {e}")
+    for ev in reversed(events):
+        order = ev.get("order") or {}
+        order_id = str(order.get("id") or "")
+        tx_hash = str(ev.get("transactionHash") or "")
+        price = str(ev.get("priceExecuted") or "")
+        amount = str(ev.get("amountFilled") or "")
+        timestamp = str(ev.get("timestamp") or "")
+        event_key = build_event_key(address, tx_hash, order_id, timestamp, price, amount)
+        
+        if is_activity_seen_fast(address, event_key):
+            continue
             
-    await batch_record_activities(db_records)
+        if is_first_run:
+            mark_activity_seen_fast(address, event_key)
+            db_records.append((address, event_key, timestamp))
+            continue
+            
+        logger.info(f"⚡ [USER EVENT] New event for {nickname} ({address[:6]}...)")
+        scanner_state["last_trade_time"] = time.time()
+        scanner_state["last_trade_info"] = f"{nickname}: {order_id}"
+        try:
+            msg = format_telegram_message(address, ev, nickname)
+            await send_notification(msg, chat_id=whale.get("chat_id"))
+            mark_activity_seen_fast(address, event_key)
+            db_records.append((address, event_key, timestamp))
+        except Exception as e:
+            logger.error(f"Error processing user event {event_key}: {e}")
+            
+    if db_records:
+        await batch_record_activities(db_records)
 
 async def tracker_loop():
-    logger.info("Predict.fun Tracker loop started")
+    logger.info("Predict.fun Dual-Engine Tracker loop started")
     count = await load_seen_cache()
     logger.info(f"📦 Loaded {count} seen tx hashes into memory cache")
     scanner_state["status"] = "active"
@@ -213,15 +274,17 @@ async def tracker_loop():
     timeout = aiohttp.ClientTimeout(total=10)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=HEADERS) as session:
-        # --- FIRST RUN SEEDING ---
         is_first_run = (count == 0)
         try:
             whales = await get_whales_cached()
-            active_whales = [w for w in whales if w.get('status', 'tracking') == 'tracking']
+            active_whales = [w for w in whales if w.get("status", "tracking") == "tracking"]
+            tracked_map = {w["address"].lower(): w for w in active_whales}
+            
             if active_whales:
+                await process_global_matches(session, tracked_map, is_first_run=is_first_run)
                 for w in active_whales:
                     await process_wallet(session, w, is_first_run=is_first_run)
-                await send_notification(f"✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina canlı takipte\n📦 {count} kayıtlı işlem hafızada\n⏱ Tarama aralığı: {POLL_INTERVAL}s (Yeni alım/satım anında Telegrama düşer)")
+                await send_notification(f"✅ <b>PREDICT TRACKER ÇİFT MOTORLU SİSTEM BAŞLATILDI!</b>\n🐋 {len(active_whales)} balina takipte\n📦 {count} kayıtlı işlem hafızada\n⏱ Tarama aralığı: {POLL_INTERVAL}s (Global Trade Feed + User Event Stream)")
             else:
                 await send_notification("✅ <b>PREDICT TRACKER BAŞARIYLA BAŞLATILDI!</b>\nLütfen takip için aktif bir cüzdan adresi ekleyin.")
         except Exception as e:
@@ -234,11 +297,17 @@ async def tracker_loop():
                 scanner_state["scans_count"] += 1
                 
                 whales = await get_whales_cached()
-                active_whales = [w for w in whales if w.get('status', 'tracking') == 'tracking']
+                active_whales = [w for w in whales if w.get("status", "tracking") == "tracking"]
                 if not active_whales:
                     await asyncio.sleep(POLL_INTERVAL)
                     continue
 
+                tracked_map = {w["address"].lower(): w for w in active_whales}
+                
+                # Engine 1: Global Live Trade Stream
+                await process_global_matches(session, tracked_map, is_first_run=False)
+                
+                # Engine 2: Per-Wallet Event Stream
                 tasks = [process_wallet(session, whale, is_first_run=False) for whale in active_whales]
                 await asyncio.gather(*tasks, return_exceptions=True)
                 
