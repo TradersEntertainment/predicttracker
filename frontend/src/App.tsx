@@ -26,7 +26,11 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
 
-  const API_BASE = import.meta.env.VITE_API_URL || '';
+  let rawApiBase = (import.meta.env.VITE_API_URL || '').trim();
+if (rawApiBase && !rawApiBase.startsWith('http://') && !rawApiBase.startsWith('https://')) {
+  rawApiBase = `https://${rawApiBase}`;
+}
+const API_BASE = rawApiBase;
 
   const fetchWhales = async () => {
     try {
