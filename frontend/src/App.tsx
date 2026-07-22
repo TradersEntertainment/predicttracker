@@ -27,10 +27,10 @@ function App() {
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
 
   let rawApiBase = (import.meta.env.VITE_API_URL || '').trim();
-if (rawApiBase && !rawApiBase.startsWith('http://') && !rawApiBase.startsWith('https://')) {
-  rawApiBase = `https://${rawApiBase}`;
-}
-const API_BASE = rawApiBase;
+  if (rawApiBase && !rawApiBase.startsWith('http://') && !rawApiBase.startsWith('https://')) {
+    rawApiBase = `https://${rawApiBase}`;
+  }
+  const API_BASE = rawApiBase;
 
   const fetchWhales = async () => {
     try {
@@ -65,7 +65,7 @@ const API_BASE = rawApiBase;
 
   const showToast = (message: string) => {
     setToast({ message, visible: true });
-    setTimeout(() => setToast({ message: '', visible: false }), 3000);
+    setTimeout(() => setToast({ message: '', visible: false }), 4000);
   };
 
   const handleAddWhale = async (e: React.FormEvent) => {
@@ -142,6 +142,25 @@ const API_BASE = rawApiBase;
     }
   };
 
+  const handleTestTelegram = async (addressToTest?: string) => {
+    try {
+      showToast('Telegram test bildirimi gönderiliyor... 🧪');
+      const url = addressToTest 
+        ? `${API_BASE}/api/whales/${addressToTest}/test`
+        : `${API_BASE}/api/test_telegram`;
+        
+      const response = await fetch(url, { method: 'POST' });
+      if (response.ok) {
+        showToast('✅ Telegram test bildirimi başarıyla gönderildi! Telegramınızı kontrol edin.');
+      } else {
+        const error = await response.json();
+        showToast(`⚠️ Hata: ${error.detail || 'Bildirim gönderilemedi'}`);
+      }
+    } catch (e) {
+      showToast('⚠️ Bağlantı hatası! Telegram bildirimi gönderilemedi.');
+    }
+  };
+
   const truncateAddress = (addr: string): string => {
     if (!addr) return '';
     return `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}`;
@@ -186,6 +205,15 @@ const API_BASE = rawApiBase;
       <header className="header">
         <h1 className="gradient-text">Predict Whale Tracker</h1>
         <p>Predict.fun'daki balinaların cüzdan hareketlerini canlı takip edin</p>
+        <div style={{ marginTop: '15px' }}>
+          <button 
+            onClick={() => handleTestTelegram()} 
+            className="btn btn-primary"
+            style={{ padding: '10px 20px', fontSize: '0.9rem' }}
+          >
+            Telegram Bildirim Testi Gönder 🧪
+          </button>
+        </div>
       </header>
 
       {/* Stats Bar */}
@@ -303,7 +331,7 @@ const API_BASE = rawApiBase;
                       </div>
                     </div>
 
-                    <div className="whale-actions">
+                    <div className="whale-actions" style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                       <a
                         href={`https://predict.fun/portfolio/${w.address}`}
                         target="_blank"
@@ -322,6 +350,14 @@ const API_BASE = rawApiBase;
                       >
                         🔍
                       </a>
+                      <button
+                        onClick={() => handleTestTelegram(w.address)}
+                        className="btn btn-sm"
+                        style={{ background: 'rgba(0, 240, 255, 0.15)', color: '#00f0ff', border: '1px solid rgba(0, 240, 255, 0.3)' }}
+                        title="Telegram Test Bildirimi Gönder"
+                      >
+                        Test 🧪
+                      </button>
                       <button
                         onClick={() => handleRemove(w.address, w.name)}
                         className="btn btn-danger btn-sm"

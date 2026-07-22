@@ -114,7 +114,48 @@ async def api_get_balances():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Mount Frontend Dist if built
+@app.post("/api/test_telegram")
+async def api_test_telegram(payload: dict = None):
+    try:
+        from tracker import fetch_user_events, format_telegram_message
+        from bot_engine import send_notification
+        import aiohttp
+        
+        address = (payload or {}).get("address") or "0x17C99cd6ca9032910de5ccFA2a2FeBCc22319A86"
+        chat_id = (payload or {}).get("chat_id")
+        nickname = (payload or {}).get("name") or "Predict Balina 1"
+        
+        async with aiohttp.ClientSession() as session:
+            events = await fetch_user_events(session, address)
+            if events and len(events) > 0:
+                last_ev = events[0]
+                msg = "🧪 <b>PREDICT TRACKER TEST BİLDİRİMİ (Gerçek İşlem)</b>\n" + format_telegram_message(address, last_ev, nickname)
+            else:
+                msg = (
+                    f"🧪 <b>PREDICT TRACKER TEST BİLDİRİMİ</b>\n"
+                    f"🟢 <b>BUY</b> $1.05 | <b>DOWN</b> | 💰 $0.500\n"
+                    f"📊 <b>Bitcoin Up or Down - July 21, 9:25PM-9:30PM ET</b>\n"
+                    f"📦 Adet: 2.10 Shares\n"
+                    f"👤 <a href='https://predict.fun/portfolio/{address}'>{nickname}</a> | ⏰ Jul 22, 01:25 AM\n"
+                    f"🔗 <a href='https://bscscan.com/address/{address}'>BscScan Tx</a>"
+                )
+            await send_notification(msg, chat_id=chat_id)
+            return {"success": True, "message": "Test notification sent successfully"}
+    except Exception as e:
+        logger.error(f"Test notification failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/whales/{address}/test")
+async def api_test_whale_telegram(address: str):
+    try:
+        whales = await get_whales()
+        matching = [w for w in whales if w.get("address", "").lower() == address.lower()]
+        whale = matching[0] if matching else {"address": address, "name": "Predict Balina 1"}
+        
+        return await api_test_telegram({"address": whale["address"], "name": whale.get("name"), "chat_id": whale.get("chat_id")})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 frontend_dist = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
 if os.path.exists(frontend_dist):
     assets_dir = os.path.join(frontend_dist, "assets")
