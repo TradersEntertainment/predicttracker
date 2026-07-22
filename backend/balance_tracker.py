@@ -65,8 +65,11 @@ async def fetch_portfolio_value(session: aiohttp.ClientSession, address: str) ->
         async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=8) as response:
             if response.status == 200:
                 data = await response.json()
-                edges = data.get("data", {}).get("account", {}).get("positions", {}).get("edges", [])
-                total_val = sum([float(e.get("node", {}).get("valueUsd") or 0) for e in edges])
+                data_obj = data.get("data") or {}
+                account_obj = data_obj.get("account") or {}
+                positions_obj = account_obj.get("positions") or {}
+                edges = positions_obj.get("edges") or []
+                total_val = sum([float((e.get("node") or {}).get("valueUsd") or 0) for e in edges if isinstance(e, dict)])
                 return total_val
     except Exception as e:
         logger.error(f"Portfolio value fetch error for {address}: {e}")

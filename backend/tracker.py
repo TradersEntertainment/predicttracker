@@ -128,14 +128,16 @@ async def fetch_user_events(session: aiohttp.ClientSession, address: str):
         async with session.post(PREDICT_GRAPHQL_URL, json=payload, timeout=10) as response:
             if response.status == 200:
                 data = await response.json()
-                account = data.get("data", {}).get("account") or {}
+                data_obj = data.get("data") or {}
+                account = data_obj.get("account") or {}
                 orders_log = account.get("ordersEventLog") or {}
                 edges = orders_log.get("edges") or []
                 events = []
                 for edge in edges:
-                    node = edge.get("node")
-                    if node and node.get("transactionHash"):
-                        events.append(node)
+                    if isinstance(edge, dict):
+                        node = edge.get("node")
+                        if node and isinstance(node, dict) and node.get("transactionHash"):
+                            events.append(node)
                 return events
             else:
                 logger.error(f"GraphQL returned HTTP {response.status} for {address}")
