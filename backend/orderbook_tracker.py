@@ -1,3 +1,26 @@
+
+import re
+
+def is_5m_btc_market(node: dict) -> bool:
+    t = str(node.get("title") or "").lower()
+    q = str(node.get("question") or "").lower()
+    m_id = str(node.get("id") or "").lower()
+    
+    text = f"{t} {q} {m_id}"
+    
+    is_btc = "bitcoin" in text or "btc" in text
+    if not is_btc:
+        return False
+        
+    if any(k in text for k in ["5m", "5-minute", "5 minute", "5 min"]):
+        return True
+        
+    if re.search(r'\d+(?::\d+)?(?:am|pm)-\d+(?::\d+)?(?:am|pm)', text):
+        if "on july" not in text and "on aug" not in text and "daily" not in text and "hourly" not in text:
+            return True
+            
+    return False
+
 import asyncio
 import time
 import aiohttp
@@ -129,13 +152,8 @@ async def orderbook_tracker_loop():
                     # If market_id is empty or 'auto' -> Scan ALL active markets (includes live 5M & next 5M)!
                     # If market_id is '5m' or 'btc' -> Scan all 5M Bitcoin markets (current live & upcoming)!
                     # Otherwise -> Filter by specific market ID/slug keyword.
-                    if not target_market_id or target_market_id == "auto":
-                        target_markets = markets
-                    elif target_market_id in ["5m", "btc", "5m_btc"]:
-                        target_markets = [
-                            m for m in markets 
-                            if "5m" in (m.get("title") or "").lower() or "5m" in (m.get("question") or "").lower() or "bitcoin" in (m.get("title") or "").lower()
-                        ]
+                    if not target_market_id or target_market_id in ["auto", "5m", "btc"]:
+                        target_markets = [m for m in markets if is_5m_btc_market(m)]
                     else:
                         target_markets = [
                             m for m in markets 
