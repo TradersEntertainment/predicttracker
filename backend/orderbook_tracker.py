@@ -3,6 +3,7 @@ import time
 import aiohttp
 import logging
 import re
+from datetime import datetime, timezone, timedelta
 from database import get_orderbook_monitors_db
 
 logging.basicConfig(level=logging.INFO)
@@ -21,7 +22,7 @@ HEADERS = {
 
 QUERY_MARKETS_ORDERBOOK = """
 query GetMarketsOrderbook {
-  markets(pagination: { first: 50 }) {
+  markets(filter: { isResolved: false }, pagination: { first: 50 }) {
     edges {
       node {
         id
@@ -41,11 +42,24 @@ query GetMarketsOrderbook {
 }
 """
 
-# Permanent seen wall cache to prevent 2-minute duplicate repetition spam
 _seen_walls = set()
 
+def parse_market_end_time_utc(title: str):
+    match = re.search(r'([A-Za-z]+ \d+),\s*\d+:\d+(?:AM|PM)-(\d+:\d+(?:AM|PM))\s*ET', title, re.IGNORECASE)
+    if match:
+        date_str = match.group(1)
+        end_time_str = match.group(2)
+        current_year = datetime.now(timezone.utc).year
+        full_dt_str = f"{date_str} {current_year} {end_time_str}"
+        try:
+            et_dt = datetime.strptime(full_dt_str, "%B %d %Y %I:%M%p")
+            utc_dt = et_dt.replace(tzinfo=timezone(timedelta(hours=-4))).astimezone(timezone.utc)
+            return utc_dt.timestamp()
+        except Exception:
+            pass
+    return None
+
 def is_5m_btc_market(node: dict) -> bool:
-    # Check trading status first: MUST BE TRADING ENABLED and TRADING status!
     if not node.get("isTradingEnabled"):
         return False
     status = str(node.get("status") or "").upper()
@@ -59,6 +73,11 @@ def is_5m_btc_market(node: dict) -> bool:
     
     is_btc = "bitcoin" in text or "btc" in text
     if not is_btc:
+        return False
+        
+    # Check if market has already expired based on end time
+    end_utc = parse_market_end_time_utc(node.get("title") or "")
+    if end_utc and datetime.now(timezone.utc).timestamp() >= end_utc:
         return False
         
     if any(k in text for k in ["5m", "5-minute", "5 minute", "5 min"]):
