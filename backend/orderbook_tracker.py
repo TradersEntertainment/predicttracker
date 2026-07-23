@@ -1,37 +1,15 @@
-
-import re
-
-def is_5m_btc_market(node: dict) -> bool:
-    t = str(node.get("title") or "").lower()
-    q = str(node.get("question") or "").lower()
-    m_id = str(node.get("id") or "").lower()
-    
-    text = f"{t} {q} {m_id}"
-    
-    is_btc = "bitcoin" in text or "btc" in text
-    if not is_btc:
-        return False
-        
-    if any(k in text for k in ["5m", "5-minute", "5 minute", "5 min"]):
-        return True
-        
-    if re.search(r'\d+(?::\d+)?(?:am|pm)-\d+(?::\d+)?(?:am|pm)', text):
-        if "on july" not in text and "on aug" not in text and "daily" not in text and "hourly" not in text:
-            return True
-            
-    return False
-
 import asyncio
 import time
 import aiohttp
 import logging
+import re
 from database import get_orderbook_monitors_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
-POLL_INTERVAL = 1.5
+POLL_INTERVAL = 1.0
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -63,21 +41,34 @@ query GetMarketsOrderbook {
 }
 """
 
-_seen_walls = {}
-_WALL_EXPIRY_SECONDS = 120
+# Permanent seen wall cache to prevent 2-minute duplicate repetition spam
+_seen_walls = set()
 
-def clean_expired_walls():
-    now = time.time()
-    expired = [k for k, t in _seen_walls.items() if now - t > _WALL_EXPIRY_SECONDS]
-    for k in expired:
-        del _seen_walls[k]
-
-def is_wall_seen(wall_key: str) -> bool:
-    clean_expired_walls()
-    return wall_key in _seen_walls
-
-def mark_wall_seen(wall_key: str):
-    _seen_walls[wall_key] = time.time()
+def is_5m_btc_market(node: dict) -> bool:
+    # Check trading status first: MUST BE TRADING ENABLED and TRADING status!
+    if not node.get("isTradingEnabled"):
+        return False
+    status = str(node.get("status") or "").upper()
+    if status and status not in ["TRADING", "ACTIVE"]:
+        return False
+        
+    t = str(node.get("title") or "").lower()
+    q = str(node.get("question") or "").lower()
+    m_id = str(node.get("id") or "").lower()
+    text = f"{t} {q} {m_id}"
+    
+    is_btc = "bitcoin" in text or "btc" in text
+    if not is_btc:
+        return False
+        
+    if any(k in text for k in ["5m", "5-minute", "5 minute", "5 min"]):
+        return True
+        
+    if re.search(r'\d+(?::\d+)?(?:am|pm)-\d+(?::\d+)?(?:am|pm)', text):
+        if "on july" not in text and "on aug" not in text and "daily" not in text and "hourly" not in text:
+            return True
+            
+    return False
 
 def format_orderbook_message(market_title: str, market_id: str, side: str, price: float, shares: float, min_shares: float) -> str:
     usd_val = round(shares * price, 2)
@@ -114,7 +105,6 @@ async def get_active_orderbook_monitors():
     except Exception as e:
         logger.error(f"Error fetching orderbook monitors: {e}")
 
-    # Fallback to 100% automatic scanning mode out of the box (2000+ shares)
     return [{
         "id": "default_auto",
         "name": "Bitcoin 5M Likidite Duvarı (Otomatik)",
@@ -148,16 +138,12 @@ async def orderbook_tracker_loop():
                     target_chat_id = monitor.get("chat_id")
                     target_market_id = (monitor.get("market_id") or "").strip().lower()
 
-                    # Dynamic market selection:
-                    # If market_id is empty or 'auto' -> Scan ALL active markets (includes live 5M & next 5M)!
-                    # If market_id is '5m' or 'btc' -> Scan all 5M Bitcoin markets (current live & upcoming)!
-                    # Otherwise -> Filter by specific market ID/slug keyword.
                     if not target_market_id or target_market_id in ["auto", "5m", "btc"]:
                         target_markets = [m for m in markets if is_5m_btc_market(m)]
                     else:
                         target_markets = [
                             m for m in markets 
-                            if target_market_id in str(m.get("id")).lower() or target_market_id in str(m.get("title")).lower()
+                            if is_5m_btc_market(m) and (target_market_id in str(m.get("id")).lower() or target_market_id in str(m.get("title")).lower())
                         ]
 
                     for m in target_markets:
@@ -167,30 +153,30 @@ async def orderbook_tracker_loop():
                         bids = ob.get("bids") or []
                         asks = ob.get("asks") or []
 
-                        # Check Bids (Buy Walls) - Ignore extreme bond prices (< 0.05 or > 0.95)
+                        # Check Bids (Buy Walls) - Ignore bond yield prices (< 0.05 or > 0.95)
                         for b in bids:
                             if isinstance(b, list) and len(b) >= 2:
                                 price, shares = float(b[0]), float(b[1])
                                 if price < 0.05 or price > 0.95:
                                     continue
                                 if shares >= min_shares:
-                                    wall_key = f"{m_id}_BID_{price:.3f}_{int(shares / 50)}"
-                                    if not is_wall_seen(wall_key):
-                                        mark_wall_seen(wall_key)
+                                    wall_key = f"{m_id}_BID_{price:.3f}"
+                                    if wall_key not in _seen_walls:
+                                        _seen_walls.add(wall_key)
                                         logger.info(f"🧱 BID WALL: {shares} shares @ ${price} in {title}")
                                         msg = format_orderbook_message(title, m_id, "BUY (BID)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
 
-                        # Check Asks (Sell Walls) - Ignore extreme bond prices (< 0.05 or > 0.95)
+                        # Check Asks (Sell Walls) - Ignore bond yield prices (< 0.05 or > 0.95)
                         for a in asks:
                             if isinstance(a, list) and len(a) >= 2:
                                 price, shares = float(a[0]), float(a[1])
                                 if price < 0.05 or price > 0.95:
                                     continue
                                 if shares >= min_shares:
-                                    wall_key = f"{m_id}_ASK_{price:.3f}_{int(shares / 50)}"
-                                    if not is_wall_seen(wall_key):
-                                        mark_wall_seen(wall_key)
+                                    wall_key = f"{m_id}_ASK_{price:.3f}"
+                                    if wall_key not in _seen_walls:
+                                        _seen_walls.add(wall_key)
                                         logger.info(f"🧱 ASK WALL: {shares} shares @ ${price} in {title}")
                                         msg = format_orderbook_message(title, m_id, "SELL (ASK)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
