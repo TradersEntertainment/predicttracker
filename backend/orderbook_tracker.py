@@ -10,7 +10,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PREDICT_GRAPHQL_URL = "https://graphql.predict.fun/graphql"
-POLL_INTERVAL = 1.0
+# Ultra-Fast 0.5-second (500ms) polling interval for sub-second speed
+POLL_INTERVAL = 0.5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -22,7 +23,7 @@ HEADERS = {
 
 QUERY_MARKETS_ORDERBOOK = """
 query GetMarketsOrderbook {
-  markets(filter: { isResolved: false }, pagination: { first: 50 }) {
+  markets(pagination: { first: 50 }) {
     edges {
       node {
         id
@@ -60,12 +61,6 @@ def parse_market_end_time_utc(title: str):
     return None
 
 def is_5m_btc_market(node: dict) -> bool:
-    if not node.get("isTradingEnabled"):
-        return False
-    status = str(node.get("status") or "").upper()
-    if status and status not in ["TRADING", "ACTIVE"]:
-        return False
-        
     t = str(node.get("title") or "").lower()
     q = str(node.get("question") or "").lower()
     m_id = str(node.get("id") or "").lower()
@@ -75,9 +70,9 @@ def is_5m_btc_market(node: dict) -> bool:
     if not is_btc:
         return False
         
-    # Check if market has already expired based on end time
+    # Allow a safety grace buffer of +180 seconds (3 minutes) after end time so no valid alert is ever lost!
     end_utc = parse_market_end_time_utc(node.get("title") or "")
-    if end_utc and datetime.now(timezone.utc).timestamp() >= end_utc:
+    if end_utc and datetime.now(timezone.utc).timestamp() > (end_utc + 180):
         return False
         
     if any(k in text for k in ["5m", "5-minute", "5 minute", "5 min"]):
@@ -133,10 +128,10 @@ async def get_active_orderbook_monitors():
     }]
 
 async def orderbook_tracker_loop():
-    logger.info("Orderbook Liquidity Wall Tracker loop started")
+    logger.info("Orderbook Liquidity Wall Tracker 0.5s Ultra-Fast loop started")
     from bot_engine import send_notification
     
-    connector = aiohttp.TCPConnector(limit=50, enable_cleanup_closed=True, ttl_dns_cache=300)
+    connector = aiohttp.TCPConnector(limit=100, enable_cleanup_closed=True, ttl_dns_cache=300)
     timeout = aiohttp.ClientTimeout(total=5)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=HEADERS) as session:
@@ -182,7 +177,7 @@ async def orderbook_tracker_loop():
                                     wall_key = f"{m_id}_BID_{price:.3f}"
                                     if wall_key not in _seen_walls:
                                         _seen_walls.add(wall_key)
-                                        logger.info(f"🧱 BID WALL: {shares} shares @ ${price} in {title}")
+                                        logger.info(f"⚡ [INSTANT WALL Alert] BID: {shares} shares @ ${price} in {title}")
                                         msg = format_orderbook_message(title, m_id, "BUY (BID)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
 
@@ -196,7 +191,7 @@ async def orderbook_tracker_loop():
                                     wall_key = f"{m_id}_ASK_{price:.3f}"
                                     if wall_key not in _seen_walls:
                                         _seen_walls.add(wall_key)
-                                        logger.info(f"🧱 ASK WALL: {shares} shares @ ${price} in {title}")
+                                        logger.info(f"⚡ [INSTANT WALL Alert] ASK: {shares} shares @ ${price} in {title}")
                                         msg = format_orderbook_message(title, m_id, "SELL (ASK)", price, shares, min_shares)
                                         await send_notification(msg, chat_id=target_chat_id)
 
