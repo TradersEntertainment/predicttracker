@@ -25,6 +25,16 @@ interface ScannerStatus {
   last_trade_info?: string;
 }
 
+
+interface LimitlessWallet {
+  id: number;
+  address: string;
+  name: string;
+  chat_id?: string;
+  added_at: string;
+  status: string;
+}
+
 interface OrderbookMonitor {
   id: string;
   name: string;
@@ -52,6 +62,12 @@ function App() {
   const [obMinShares, setObMinShares] = useState('2000');
   const [obMarketId, setObMarketId] = useState('');
   const [obChatId, setObChatId] = useState('');
+
+  
+  const [limitlessWallets, setLimitlessWallets] = useState<LimitlessWallet[]>([]);
+  const [limitlessAddress, setLimitlessAddress] = useState('');
+  const [limitlessName, setLimitlessName] = useState('');
+  const [limitlessChatId, setLimitlessChatId] = useState('');
 
   const [toast, setToast] = useState<{ message: string; visible: boolean }>({ message: '', visible: false });
 
@@ -91,6 +107,17 @@ function App() {
     }
   };
 
+  
+  const fetchLimitlessWallets = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/limitless_wallets`);
+      const data = await response.json();
+      setLimitlessWallets(data || []);
+    } catch (e) {
+      console.error('Error fetching limitless wallets', e);
+    }
+  };
+
   const fetchOrderbookMonitors = async () => {
     try {
       const response = await fetch(`${API_BASE}/api/orderbook_monitors`);
@@ -106,6 +133,7 @@ function App() {
     fetchBalances();
     fetchScannerStatus();
     fetchOrderbookMonitors();
+    fetchLimitlessWallets();
 
     const whaleInterval = setInterval(fetchWhales, 10000);
     const balanceInterval = setInterval(fetchBalances, 30000);
@@ -159,6 +187,55 @@ function App() {
     }
   };
 
+  
+  const handleAddLimitlessWallet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!limitlessAddress || !limitlessName) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/limitless_wallets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: limitlessAddress, name: limitlessName, chat_id: limitlessChatId || null }),
+      });
+      if (res.ok) {
+        setLimitlessAddress('');
+        setLimitlessName('');
+        setLimitlessChatId('');
+        fetchLimitlessWallets();
+        showToast('🌀 Limitless Balina takibe alındı!');
+      } else {
+        showToast('❌ Hata oluştu.');
+      }
+    } catch (err) {
+      showToast('❌ Bağlantı hatası.');
+    }
+  };
+
+  const handleDeleteLimitlessWallet = async (addr: string) => {
+    try {
+      await fetch(`${API_BASE}/api/limitless_wallets/${addr}`, { method: 'DELETE' });
+      fetchLimitlessWallets();
+      showToast('🗑️ Limitless balinası silindi.');
+    } catch (err) {
+      showToast('❌ Hata oluştu.');
+    }
+  };
+
+  const handleTestLimitlessWallet = async (addr: string) => {
+    try {
+      showToast('🧪 Limitless test bildirimi gönderiliyor...');
+      const res = await fetch(`${API_BASE}/api/limitless_wallets/${addr}/test`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) {
+        showToast("✅ Test bildirimi Telegram'a düştü!");
+      } else {
+        showToast(`❌ ${data.detail || 'Test başarısız'}`);
+      }
+    } catch (err) {
+      showToast('❌ Test gönderilemedi.');
+    }
+  };
+
   const handleAddOrderbookMonitor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!obName || !obMinShares) {
@@ -182,6 +259,7 @@ function App() {
         setObMarketId('');
         showToast('Orderbook likidite takibi başlatıldı! 🧱');
         fetchOrderbookMonitors();
+    fetchLimitlessWallets();
       } else {
         const error = await response.json();
         showToast(`Hata: ${error.detail || 'Eklenemedi'}`);
@@ -197,6 +275,7 @@ function App() {
       if (response.ok) {
         showToast('Orderbook takibi kaldırıldı.');
         fetchOrderbookMonitors();
+    fetchLimitlessWallets();
       }
     } catch (e) {
       showToast('Hata oluştu!');
@@ -446,6 +525,81 @@ function App() {
                     </div>
                   </div>
                   <button onClick={() => handleDeleteOrderbookMonitor(m.id)} className="btn btn-danger btn-sm" style={{ padding: '4px 10px' }}>Sil 🗑️</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      
+      {/* 🌀 LIMITLESS EXCHANGE BALİNA TAKİBİ */}
+      <div className="glass-panel" style={{ marginBottom: '30px', background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.1), rgba(79, 70, 229, 0.05))', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+          <h2 style={{ color: '#c084fc' }}>🌀 Limitless Exchange Balına Takibi (Base Network)</h2>
+          <span style={{ fontSize: '0.8rem', background: 'rgba(168, 85, 247, 0.2)', color: '#e9d5ff', padding: '4px 12px', borderRadius: '20px', border: '1px solid rgba(168, 85, 247, 0.4)' }}>
+            ⚡ 24/7 Otomatik Base RPC & Explorer Tarayıcısı
+          </span>
+        </div>
+        
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '5px' }}>
+          Limitless Exchange (limitless.exchange) platformundaki balina cüzdanlarının alım, satım ve pozisyon kapatma işlemlerini anında Telegram kanalınıza düşürür.
+        </p>
+
+        <form onSubmit={handleAddLimitlessWallet} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginTop: '20px' }}>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Limitless Cüzdan Adresi</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="0x328c4072920e5e3f95911e887c077c23deb91901"
+              value={limitlessAddress}
+              onChange={(e) => setLimitlessAddress(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Balına İsmi / Etiket</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Örn: Limitless Balina 1"
+              value={limitlessName}
+              onChange={(e) => setLimitlessName(e.target.value)}
+            />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Telegram Chat ID (Opsiyonel)</label>
+            <input
+              type="text"
+              className="input-field"
+              placeholder="Boş bırakılırsa ana Telegram kanalı"
+              value={limitlessChatId}
+              onChange={(e) => setLimitlessChatId(e.target.value)}
+            />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', height: '42px', background: 'linear-gradient(135deg, #a855f7, #7e22ce)' }}>
+              Limitless Balina Ekle 🌀
+            </button>
+          </div>
+        </form>
+
+        {limitlessWallets.length > 0 && (
+          <div style={{ marginTop: '20px' }}>
+            <h4 style={{ color: 'var(--text-secondary)', marginBottom: '10px' }}>Takip Edilen Limitless Balinaları ({limitlessWallets.length})</h4>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+              {limitlessWallets.map((w) => (
+                <div key={w.address} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '10px 15px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '15px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                  <div>
+                    <strong style={{ color: '#c084fc', fontSize: '0.9rem' }}>🌀 {w.name}</strong>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                      {w.address.slice(0, 8)}...{w.address.slice(-6)}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => handleTestLimitlessWallet(w.address)} className="btn btn-sm" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '4px 10px' }}>Test 🧪</button>
+                    <button onClick={() => handleDeleteLimitlessWallet(w.address)} className="btn btn-danger btn-sm" style={{ padding: '4px 10px' }}>Sil 🗑️</button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -9,6 +9,10 @@ elif os.path.exists("/data") and os.access("/data", os.W_OK):
 else:
     DB_PATH = "data/balina.db"
 
+INITIAL_LIMITLESS_WALLETS = [
+    ("0x328c4072920e5e3f95911e887c077c23deb91901", "Limitless Balina 1", None),
+]
+
 INITIAL_WHALES = [
     ("0x17c99cd6ca9032910de5ccfa2a2febcc22319a86", "Predict Balina 1", None),
 ]
@@ -63,6 +67,24 @@ async def init_db():
         INSERT OR IGNORE INTO orderbook_monitors (id, name, market_id, min_shares, chat_id, status)
         VALUES ('default_auto', 'Bitcoin 5M Likidite Duvarı (Otomatik)', NULL, 2000, NULL, 'active')
         """)
+
+        
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS limitless_wallets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                chat_id TEXT,
+                added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'tracking'
+            )
+        """)
+
+        for address, name, chat_id in INITIAL_LIMITLESS_WALLETS:
+            await db.execute(
+                "INSERT OR IGNORE INTO limitless_wallets (address, name, chat_id) VALUES (?, ?, ?)",
+                (address.lower(), name, chat_id)
+            )
 
         await db.commit()
 
@@ -192,3 +214,28 @@ async def delete_orderbook_monitor_db(monitor_id: str):
         await db.execute("DELETE FROM orderbook_monitors WHERE id = ?", (monitor_id,))
         await db.commit()
     return True
+
+
+# --- LIMITLESS WALLET DB FUNCTIONS ---
+async def get_limitless_wallets_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM limitless_wallets") as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+async def add_limitless_wallet_db(address: str, name: str, chat_id: str = None):
+    address_lower = address.strip().lower()
+    async with aiosqlite.connect(DB_PATH) as db:
+        try:
+            await db.execute("INSERT INTO limitless_wallets (address, name, chat_id) VALUES (?, ?, ?)", (address_lower, name, chat_id))
+            await db.commit()
+            return True
+        except aiosqlite.IntegrityError:
+            return False
+
+async def delete_limitless_wallet_db(address: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM limitless_wallets WHERE LOWER(address) = LOWER(?)", (address,))
+        await db.commit()
+        return True
