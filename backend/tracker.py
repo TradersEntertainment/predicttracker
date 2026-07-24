@@ -120,19 +120,42 @@ def format_telegram_message(wallet: str, event_node: dict, nickname: str = None)
     price = raw_price / 1e18 if raw_price > 1e12 else raw_price
     total_spent = round(shares * price, 2)
     
-    title = str(market.get("title") or market.get("question") or "Predict Market")
-    outcome_name = str(outcome.get("name") or "Outcome")
-    
-    if side == "BUY":
-        emoji = "🟢"
-    elif side == "SELL":
+    full_title = str(market.get("title") or market.get("question") or "Predict Market")
+    outcome_name = str(outcome.get("name") or "UP").strip()
+    out_upper = outcome_name.upper()
+
+    # Determine Emoji & Direction text:
+    # DOWN -> 🔴 (Kırmızı)
+    # UP -> 🟢 (Yeşil)
+    if "DOWN" in out_upper or out_upper == "NO":
         emoji = "🔴"
+        direction_text = "DOWN"
+    elif "UP" in out_upper or out_upper == "YES":
+        emoji = "🟢"
+        direction_text = "UP"
     else:
-        emoji = "🔵"
-        
-    display_title = title
-    if len(display_title) > 80:
-        display_title = display_title[:77] + "..."
+        direction_text = out_upper
+        if side == "SELL":
+            emoji = "🔴"
+        else:
+            emoji = "🟢"
+
+    # Title & Topic parsing to match original polygeneltakip format
+    if " - " in full_title:
+        parts = full_title.split(" - ", 1)
+        base_title = parts[0].strip()
+        period_str = parts[1].strip()
+        title_line = f"📊 <b>{base_title}</b> | ⏰ <b>{period_str}</b>"
+    else:
+        base_title = full_title
+        title_line = f"📊 <b>{full_title}</b>"
+
+    if "5m" in full_title.lower() or "5 minute" in full_title.lower() or "5-minute" in full_title.lower():
+        topic_tag = "Bitcoin 5 minute" if ("bitcoin" in full_title.lower() or "btc" in full_title.lower()) else "5 minute"
+    elif "bitcoin" in full_title.lower() or "btc" in full_title.lower():
+        topic_tag = "Bitcoin"
+    else:
+        topic_tag = base_title[:25]
 
     name_display = f"{nickname}" if nickname else f"{wallet[:6]}...{wallet[-4:]}"
     
@@ -140,7 +163,7 @@ def format_telegram_message(wallet: str, event_node: dict, nickname: str = None)
     time_str = ""
     if timestamp:
         try:
-            dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
             time_str = dt.strftime("%b %d, %I:%M %p")
         except Exception:
             time_str = str(timestamp)[:19]
@@ -149,12 +172,12 @@ def format_telegram_message(wallet: str, event_node: dict, nickname: str = None)
     tx_link = f"https://bscscan.com/tx/{tx_hash}" if tx_hash else f"https://predict.fun/portfolio/{wallet}"
     profile_link = f"https://predict.fun/portfolio/{wallet}"
 
-    msg = f"{emoji} <b>{side}</b> ${total_spent:.2f} | <b>{outcome_name.upper()}</b> | 💰 ${price:.3f}\n"
-    msg += f"📊 <b>{display_title}</b>\n"
-    msg += f"📦 Adet: {shares:,.2f} Shares\n"
-    msg += f"👤 <a href='{profile_link}'>{name_display}</a>"
+    header_line = f"{emoji} <b>{total_spent:,.2f}$</b> | <b>{direction_text} {topic_tag}</b> | 💰 <b>{price:.3f}$</b>"
+    user_line = f"👤 <b><a href='{profile_link}'>{name_display}</a></b>"
     if time_str:
-        msg += f" | ⏰ {time_str}"
+        user_line += f" | ⏰ <b>{time_str}</b>"
+
+    msg = f"{header_line}\n{title_line}\n{user_line}"
     if tx_hash:
         msg += f"\n🔗 <a href='{tx_link}'>BscScan Tx</a>"
 
