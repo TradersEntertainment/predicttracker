@@ -2,7 +2,7 @@ import asyncio
 import time
 import aiohttp
 import logging
-from database import get_limitless_wallets_db, is_activity_seen, mark_activity_seen
+from database import get_limitless_wallets_db, is_activity_seen, record_activity
 from bot_engine import send_notification
 
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +18,7 @@ HEADERS = {
 }
 
 _market_cache = {}
+_first_run_wallets = set()
 
 async def fetch_limitless_market(session: aiohttp.ClientSession, condition_id: str) -> dict:
     if not condition_id:
@@ -62,6 +63,8 @@ async def process_wallet_transactions(session: aiohttp.ClientSession, wallet: di
     wallet_name = wallet.get("name") or "Limitless Balina"
     custom_chat_id = wallet.get("chat_id")
     
+    is_initial_run = address not in _first_run_wallets
+    
     url = f"{BLOCKSCOUT_API_BASE}/addresses/{address}/transactions"
     try:
         async with session.get(url, timeout=6) as resp:
@@ -79,8 +82,13 @@ async def process_wallet_transactions(session: aiohttp.ClientSession, wallet: di
                 if seen:
                     continue
                     
-                await mark_activity_seen(address, tx_hash, str(tx.get("timestamp") or ""))
+                # Mark activity in DB
+                await record_activity(address, tx_hash, str(tx.get("timestamp") or ""))
                 
+                # If initial startup run, seed history without spamming old notifications
+                if is_initial_run:
+                    continue
+
                 method = tx.get("method") or "Contract Call"
                 market_title = ""
                 amount_str = ""
@@ -116,6 +124,8 @@ async def process_wallet_transactions(session: aiohttp.ClientSession, wallet: di
                 logger.info(f"🌀 [LIMITLESS ALERT] {wallet_name} | Tx: {tx_hash[:10]} | Method: {method} | Market: {market_title}")
                 msg = format_limitless_message(wallet_name, address, tx_hash, method, market_title, amount_str, custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
+                
+            _first_run_wallets.add(address)
                 
     except Exception as e:
         logger.error(f"Error processing Limitless wallet {address}: {e}")
