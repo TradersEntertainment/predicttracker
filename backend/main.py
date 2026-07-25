@@ -207,18 +207,72 @@ async def api_test_limitless_wallet(address: str):
         matching = [w for w in wallets if w.get("address", "").lower() == address.lower()]
         w = matching[0] if matching else {"address": address, "name": "Limitless Balina 1"}
         
-        msg = format_limitless_message(
+        async with aiohttp.ClientSession() as session:
+            url = f"https://base.blockscout.com/api/v2/addresses/{address}/transactions"
+            async with session.get(url, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    items = data.get("items") or []
+                    if items:
+                        last_tx = items[0]
+                        tx_hash = last_tx.get("hash") or "0x..."
+                        method = last_tx.get("method") or "Contract Call"
+                        
+                        market_title = "BTC Up or Down - 5 Min"
+                        amount_str = ""
+                        try:
+                            log_url = f"https://base.blockscout.com/api/v2/transactions/{tx_hash}/logs"
+                            async with session.get(log_url, timeout=4) as lresp:
+                                if lresp.status == 200:
+                                    ldata = await lresp.json()
+                                    litems = ldata.get("items") or []
+                                    for log_item in litems:
+                                        decoded = log_item.get("decoded") or {}
+                                        params = decoded.get("parameters") or []
+                                        for p in params:
+                                            p_name = p.get("name")
+                                            p_val = p.get("value")
+                                            if p_name == "conditionId" and p_val:
+                                                m_info = await fetch_limitless_market(session, str(p_val))
+                                                if m_info:
+                                                    market_title = m_info.get("title") or m_info.get("description") or market_title
+                                            elif p_name in ["payout", "value"] and p_val:
+                                                try:
+                                                    val_num = float(p_val)
+                                                    if val_num > 1000:
+                                                        usdc_val = val_num / 1e6
+                                                        if 0.1 <= usdc_val <= 1e7:
+                                                            amount_str = f"~${usdc_val:,.2f} USDC"
+                                                except Exception:
+                                                    pass
+                        except Exception:
+                            pass
+                            
+                        msg = "🧪 <b>LIMITLESS TRACKER TEST BİLDİRİMİ (Gerçek Son İşlem)</b>\n\n" + format_limitless_message(
+                            w.get("name") or "Limitless Balina",
+                            address,
+                            tx_hash,
+                            method,
+                            market_title,
+                            amount_str,
+                            w.get("chat_id")
+                        )
+                        await send_notification(msg, chat_id=w.get("chat_id"))
+                        return {"success": True, "message": "Real test notification sent successfully"}
+
+        msg = "🧪 <b>LIMITLESS TRACKER TEST BİLDİRİMİ</b>\n\n" + format_limitless_message(
             w.get("name") or "Limitless Balina 1",
             address,
             "0xd21bbcf602e2d68f38cfa47ee3e5874cb964c654d8bfb8c9522f627da97fc103",
             "redeemPositions (TEST)",
-            "Metamask FDV above $700M one day after launch?",
-            "~$14,833.95 USDC",
+            "BTC Up or Down - 5 Min",
+            "~$10,000.00 USDC",
             w.get("chat_id")
         )
         await send_notification(msg, chat_id=w.get("chat_id"))
         return {"success": True, "message": "Test notification sent successfully"}
     except Exception as e:
+        logger.error(f"Limitless test failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
