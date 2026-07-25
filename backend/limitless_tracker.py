@@ -24,7 +24,7 @@ _first_run_wallets = set()
 # LIMITLESS ORDERBOOK WALL TRACKER (5M BTC)
 # ==========================================
 ORDERBOOK_POLL_INTERVAL = 0.8
-ORDERBOOK_MIN_SIZE_USDC = 8000
+ORDERBOOK_MIN_CONTRACTS = 8000
 ORDERBOOK_PRICE_MIN = 0.02
 ORDERBOOK_PRICE_MAX = 0.98
 _ob_seen_walls = {}
@@ -36,7 +36,7 @@ def get_current_5m_slug():
     return f"btc-up-or-down-5-min-{current_slot}", current_slot
 
 
-def format_limitless_wall_message(slug, side, price, size_usdc, market_url):
+def format_limitless_wall_message(slug, side, price, contracts, total_usd, market_url):
     price_pct = int(price * 100)
     if side == "BUY":
         side_emoji = "\U0001f7e2"
@@ -47,8 +47,9 @@ def format_limitless_wall_message(slug, side, price, size_usdc, market_url):
 
     msg = "\U0001f6a8\U0001f6a8\U0001f6a8 <b>\u00d6NEML\u0130! LIMITLESS BAL\u0130NA EM\u0130R!</b> \U0001f6a8\U0001f6a8\U0001f6a8\n\n"
     msg += f"{side_emoji} <b>{side} Emri - {direction}</b>\n"
-    msg += f"\U0001f4b0 Emir B\u00fcy\u00fckl\u00fc\u011f\u00fc: <b>{size_usdc:,.0f} USDC</b>\n"
+    msg += f"\U0001f4e6 Kontrat: <b>{contracts:,.0f}</b>\n"
     msg += f"\U0001f4ca Fiyat: <b>{price_pct}c ({price:.3f})</b>\n"
+    msg += f"\U0001f4b0 Toplam: <b>${total_usd:,.2f}</b>\n"
     msg += f"\U0001f3af Market: <b>BTC 5 Dakika</b>\n"
     msg += f"\n\U0001f517 <a href='{market_url}'>Limitless Market</a>"
     return msg
@@ -83,24 +84,25 @@ async def scan_limitless_orderbook(session):
         all_orders.append(("SELL", order.get("price", 0), order.get("size", 0)))
 
     for side, price, raw_size in all_orders:
-        size_usdc = raw_size / 1e6
+        contracts = raw_size / 1e6
 
         if price < ORDERBOOK_PRICE_MIN or price > ORDERBOOK_PRICE_MAX:
             continue
 
-        if size_usdc < ORDERBOOK_MIN_SIZE_USDC:
+        if contracts < ORDERBOOK_MIN_CONTRACTS:
             continue
 
         wall_key = f"{slug}_{price}_{side}"
         if wall_key in _ob_seen_walls:
             old_size = _ob_seen_walls[wall_key]
-            if size_usdc <= old_size * 1.2:
+            if contracts <= old_size * 1.2:
                 continue
 
-        _ob_seen_walls[wall_key] = size_usdc
+        _ob_seen_walls[wall_key] = contracts
 
-        logger.info(f"\U0001f6a8 [LIMITLESS OB WALL] {side} {size_usdc:,.0f} USDC @ {price} | {slug}")
-        msg = format_limitless_wall_message(slug, side, price, size_usdc, market_url)
+        logger.info(f"\U0001f6a8 [LIMITLESS OB WALL] {side} {contracts:,.0f} contracts @ {price} | {slug}")
+        total_usd = contracts * price
+        msg = format_limitless_wall_message(slug, side, price, contracts, total_usd, market_url)
         await send_notification(msg)
 
     expired_keys = [k for k in _ob_seen_walls if slug not in k]
