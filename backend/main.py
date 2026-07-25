@@ -165,6 +165,63 @@ async def api_test_orderbook_telegram(payload: dict = None):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+class LimitlessWalletCreate(BaseModel):
+    address: str
+    name: str
+    chat_id: Optional[str] = None
+
+@app.get("/api/limitless_wallets")
+async def api_get_limitless_wallets():
+    try:
+        wallets = await get_limitless_wallets_db()
+        return wallets
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/limitless_wallets")
+async def api_add_limitless_wallet(w: LimitlessWalletCreate):
+    try:
+        success = await add_limitless_wallet_db(w.address, w.name, w.chat_id)
+        if success:
+            return {"success": True}
+        else:
+            raise HTTPException(status_code=400, detail="Wallet already exists")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/limitless_wallets/{address}")
+async def api_delete_limitless_wallet(address: str):
+    try:
+        await delete_limitless_wallet_db(address)
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/limitless_wallets/{address}/test")
+async def api_test_limitless_wallet(address: str):
+    try:
+        wallets = await get_limitless_wallets_db()
+        matching = [w for w in wallets if w.get("address", "").lower() == address.lower()]
+        w = matching[0] if matching else {"address": address, "name": "Limitless Balina 1"}
+        
+        msg = format_limitless_message(
+            w.get("name") or "Limitless Balina 1",
+            address,
+            "0xd21bbcf602e2d68f38cfa47ee3e5874cb964c654d8bfb8c9522f627da97fc103",
+            "redeemPositions (TEST)",
+            "Metamask FDV above $700M one day after launch?",
+            "~$14,833.95 USDC",
+            w.get("chat_id")
+        )
+        await send_notification(msg, chat_id=w.get("chat_id"))
+        return {"success": True, "message": "Test notification sent successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/health")
 async def health_check():
     return {"status": "ok"}

@@ -139,12 +139,14 @@ function App() {
     const balanceInterval = setInterval(fetchBalances, 30000);
     const scannerInterval = setInterval(fetchScannerStatus, 5000);
     const obInterval = setInterval(fetchOrderbookMonitors, 10000);
+    const limitlessInterval = setInterval(fetchLimitlessWallets, 5000);
 
     return () => {
       clearInterval(whaleInterval);
       clearInterval(balanceInterval);
       clearInterval(scannerInterval);
       clearInterval(obInterval);
+      clearInterval(limitlessInterval);
     };
   }, []);
 
