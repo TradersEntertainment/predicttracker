@@ -19,7 +19,7 @@ from balance_tracker import balance_tracker_loop, get_all_balances
 from orderbook_tracker import orderbook_tracker_loop, format_orderbook_message
 from limitless_tracker import limitless_tracker_loop, format_limitless_message
 from database import get_limitless_wallets_db, add_limitless_wallet_db, delete_limitless_wallet_db
-from bot_engine import send_notification
+from bot_engine import send_notification, start_bot_polling
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,7 +33,8 @@ async def lifespan(app: FastAPI):
     balance_task = asyncio.create_task(balance_tracker_loop())
     orderbook_task = asyncio.create_task(orderbook_tracker_loop())
     limitless_task = asyncio.create_task(limitless_tracker_loop())
-    logger.info("All tracker loops started (including Limitless Exchange)")
+    bot_task = asyncio.create_task(start_bot_polling())
+    logger.info("All tracker loops and Telegram Bot Polling started!")
     
     yield
     
@@ -42,11 +43,13 @@ async def lifespan(app: FastAPI):
     balance_task.cancel()
     orderbook_task.cancel()
     limitless_task.cancel()
+    bot_task.cancel()
     try:
         await tracker_task
         await balance_task
         await orderbook_task
         await limitless_task
+        await bot_task
     except asyncio.CancelledError:
         pass
 
