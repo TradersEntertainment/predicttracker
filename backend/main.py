@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI):
     tracker_task = asyncio.create_task(tracker_loop())
     balance_task = asyncio.create_task(balance_tracker_loop())
     orderbook_task = asyncio.create_task(orderbook_tracker_loop())
+    limitless_task = asyncio.create_task(limitless_tracker_loop())
+    logger.info("All tracker loops started (including Limitless Exchange)")
     
     yield
     
@@ -39,10 +41,12 @@ async def lifespan(app: FastAPI):
     tracker_task.cancel()
     balance_task.cancel()
     orderbook_task.cancel()
+    limitless_task.cancel()
     try:
         await tracker_task
         await balance_task
         await orderbook_task
+        await limitless_task
     except asyncio.CancelledError:
         pass
 
