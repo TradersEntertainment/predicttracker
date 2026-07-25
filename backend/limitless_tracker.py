@@ -116,7 +116,7 @@ async def scan_limitless_orderbook(session):
 
 async def fetch_limitless_market(session, condition_id):
     if not condition_id:
-        return {}
+        return {"title": "BTC Up or Down - 5 Min"}
     cid_lower = condition_id.lower()
     if cid_lower in _market_cache:
         return _market_cache[cid_lower]
@@ -131,12 +131,13 @@ async def fetch_limitless_market(session, condition_id):
                     if (m.get("conditionId") or "").lower() == cid_lower:
                         _market_cache[cid_lower] = m
                         return m
-                if markets:
-                    _market_cache[cid_lower] = markets[0]
-                    return markets[0]
     except Exception as e:
         logger.error(f"Error searching Limitless market for conditionId {cid_lower}: {e}")
-    return {}
+
+    # Fallback for 5M BTC markets when historical search is settled
+    default_m = {"title": "BTC Up or Down - 5 Min"}
+    _market_cache[cid_lower] = default_m
+    return default_m
 
 
 def format_limitless_message(wallet_name, wallet_address, tx_hash, method, market_title, amount_str, chat_id=None):
