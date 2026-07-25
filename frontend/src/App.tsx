@@ -13,6 +13,7 @@ interface Whale {
 interface BalanceInfo {
   usdc_balance: number;
   portfolio_value: number;
+  pnl_usd?: number;
   last_updated: number;
   nickname: string;
 }
@@ -590,50 +591,77 @@ function App() {
           <div style={{ marginTop: '20px' }}>
             <h4 style={{ color: 'var(--text-secondary)', marginBottom: '10px' }}>Takip Edilen Limitless Balinaları ({limitlessWallets.length})</h4>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-              {limitlessWallets.map((w) => (
-                <div key={w.address} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '12px 18px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px', border: '1px solid rgba(168, 85, 247, 0.3)', flex: '1 1 320px' }}>
-                  <div>
-                    <a
-                      href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: '#c084fc', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-                    >
-                      🌀 {w.name} 🔗
-                    </a>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: '4px' }}>
+              {limitlessWallets.map((w) => {
+                const bal = balances[w.address.toLowerCase()] || balances[w.address];
+                const usdc = bal?.usdc_balance || 0;
+                const port = bal?.portfolio_value || 0;
+                const pnl = bal?.pnl_usd || 0;
+                const total = usdc + port;
+
+                return (
+                  <div key={w.address} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '15px 20px', borderRadius: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '15px', border: '1px solid rgba(168, 85, 247, 0.3)', width: '100%' }}>
+                    <div>
                       <a
                         href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
                         target="_blank"
                         rel="noreferrer"
-                        style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
+                        style={{ color: '#c084fc', fontWeight: 'bold', fontSize: '1.05rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                       >
-                        {w.address.slice(0, 10)}...{w.address.slice(-8)}
+                        🌀 {w.name} 🔗
                       </a>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: '4px' }}>
+                        <a
+                          href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
+                        >
+                          {w.address.slice(0, 10)}...{w.address.slice(-8)}
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Bakiye & PnL Kutusu */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '15px', background: 'rgba(0, 0, 0, 0.3)', padding: '8px 16px', borderRadius: '10px', border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                      <div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Toplam USDC</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 'bold', color: '#00ff88' }}>{formatBalance(total)}</div>
+                      </div>
+                      <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '12px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                        <div>Cüzdan: <span style={{ color: '#fff' }}>{formatBalance(usdc)}</span></div>
+                        <div>Portfolio: <span style={{ color: '#fff' }}>{formatBalance(port)}</span></div>
+                      </div>
+                      <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '12px' }}>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Kâr / Zarar (PnL)</div>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: pnl >= 0 ? '#00ff88' : '#ff4d4d' }}>
+                          {pnl >= 0 ? '+' : ''}{formatBalance(pnl)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <a
+                        href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '6px 12px', borderRadius: '8px', fontSize: '0.85rem', textDecoration: 'none', fontWeight: '500' }}
+                      >
+                        Profil 🌀
+                      </a>
+                      <a
+                        href={`https://basescan.org/address/${w.address}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.2)', padding: '6px 12px', borderRadius: '8px', fontSize: '0.85rem', textDecoration: 'none', fontWeight: '500' }}
+                      >
+                        Explorer 🔍
+                      </a>
+                      <button onClick={() => handleTestLimitlessWallet(w.address)} className="btn btn-sm" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '6px 12px' }}>Test 🧪</button>
+                      <button onClick={() => handleDeleteLimitlessWallet(w.address)} className="btn btn-danger btn-sm" style={{ padding: '6px 12px' }}>Sil 🗑️</button>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                    <a
-                      href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '5px 10px', borderRadius: '6px', fontSize: '0.8rem', textDecoration: 'none', fontWeight: '500' }}
-                    >
-                      Profil 🌀
-                    </a>
-                    <a
-                      href={`https://basescan.org/address/${w.address}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.2)', padding: '5px 10px', borderRadius: '6px', fontSize: '0.8rem', textDecoration: 'none', fontWeight: '500' }}
-                    >
-                      Explorer 🔍
-                    </a>
-                    <button onClick={() => handleTestLimitlessWallet(w.address)} className="btn btn-sm" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '5px 10px' }}>Test 🧪</button>
-                    <button onClick={() => handleDeleteLimitlessWallet(w.address)} className="btn btn-danger btn-sm" style={{ padding: '5px 10px' }}>Sil 🗑️</button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -731,6 +759,12 @@ function App() {
                       <div className="balance-details">
                         <span>Cüzdan: {formatBalance(usdt)}</span>
                         <span>Portfolio: {formatBalance(port)}</span>
+                      </div>
+                      <div className="balance-details" style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '10px' }}>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Kâr / Zarar (PnL)</span>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: (bal?.pnl_usd || 0) >= 0 ? '#00ff88' : '#ff4d4d' }}>
+                          {(bal?.pnl_usd || 0) >= 0 ? '+' : ''}{formatBalance(bal?.pnl_usd || 0)}
+                        </span>
                       </div>
                     </div>
 
