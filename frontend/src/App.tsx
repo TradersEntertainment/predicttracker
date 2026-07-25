@@ -589,18 +589,48 @@ function App() {
         {limitlessWallets.length > 0 && (
           <div style={{ marginTop: '20px' }}>
             <h4 style={{ color: 'var(--text-secondary)', marginBottom: '10px' }}>Takip Edilen Limitless Balinaları ({limitlessWallets.length})</h4>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
               {limitlessWallets.map((w) => (
-                <div key={w.address} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '10px 15px', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '15px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                <div key={w.address} style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '12px 18px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px', border: '1px solid rgba(168, 85, 247, 0.3)', flex: '1 1 320px' }}>
                   <div>
-                    <strong style={{ color: '#c084fc', fontSize: '0.9rem' }}>🌀 {w.name}</strong>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                      {w.address.slice(0, 8)}...{w.address.slice(-6)}
+                    <a
+                      href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: '#c084fc', fontWeight: 'bold', fontSize: '1rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                    >
+                      🌀 {w.name} 🔗
+                    </a>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: '4px' }}>
+                      <a
+                        href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'var(--text-secondary)', textDecoration: 'none' }}
+                      >
+                        {w.address.slice(0, 10)}...{w.address.slice(-8)}
+                      </a>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => handleTestLimitlessWallet(w.address)} className="btn btn-sm" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '4px 10px' }}>Test 🧪</button>
-                    <button onClick={() => handleDeleteLimitlessWallet(w.address)} className="btn btn-danger btn-sm" style={{ padding: '4px 10px' }}>Sil 🗑️</button>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <a
+                      href={`https://limitless.exchange/profile/${w.address}?r=W4V4WOVPDM`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '5px 10px', borderRadius: '6px', fontSize: '0.8rem', textDecoration: 'none', fontWeight: '500' }}
+                    >
+                      Profil 🌀
+                    </a>
+                    <a
+                      href={`https://basescan.org/address/${w.address}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#fff', border: '1px solid rgba(255, 255, 255, 0.2)', padding: '5px 10px', borderRadius: '6px', fontSize: '0.8rem', textDecoration: 'none', fontWeight: '500' }}
+                    >
+                      Explorer 🔍
+                    </a>
+                    <button onClick={() => handleTestLimitlessWallet(w.address)} className="btn btn-sm" style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#c084fc', border: '1px solid #a855f7', padding: '5px 10px' }}>Test 🧪</button>
+                    <button onClick={() => handleDeleteLimitlessWallet(w.address)} className="btn btn-danger btn-sm" style={{ padding: '5px 10px' }}>Sil 🗑️</button>
                   </div>
                 </div>
               ))}
