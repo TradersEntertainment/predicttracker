@@ -30,6 +30,11 @@ ORDERBOOK_PRICE_MIN = 0.02
 ORDERBOOK_PRICE_MAX = 0.98
 _ob_seen_walls = {}
 
+# Whale share accumulator per time slot
+# Key: f"{address}_{slot_start}", Value: {"shares": float, "direction": str, "alerted": bool}
+_whale_slot_shares = {}
+WHALE_SHARES_THRESHOLD = 5000
+
 
 def get_current_5m_slug():
     now = int(time.time())
@@ -230,6 +235,7 @@ def classify_token_transfers(transfers, whale_address):
     erc1155_out = False
     erc1155_burn = False
     bought_token_id = None
+    total_shares_raw = 0
 
     for t in transfers:
         token = t.get("token") or {}
@@ -256,6 +262,10 @@ def classify_token_transfers(transfers, whale_address):
                 erc1155_in = True
                 if tid:
                     bought_token_id = tid
+                try:
+                    total_shares_raw += int(raw_value)
+                except (ValueError, TypeError):
+                    pass
             elif from_addr == whale:
                 if to_addr == zero_addr:
                     erc1155_burn = True
@@ -264,19 +274,19 @@ def classify_token_transfers(transfers, whale_address):
 
     # Classify
     if erc1155_burn and usdc_in > 0:
-        return "REDEEM", usdc_in, bought_token_id
+        return "REDEEM", usdc_in, bought_token_id, total_shares_raw / 1e6
     elif erc1155_in and usdc_out > 0:
-        return "BUY", usdc_out, bought_token_id
+        return "BUY", usdc_out, bought_token_id, total_shares_raw / 1e6
     elif erc1155_out and usdc_in > 0:
-        return "SELL", usdc_in, bought_token_id
+        return "SELL", usdc_in, bought_token_id, total_shares_raw / 1e6
     elif erc1155_in:
-        return "BUY", usdc_out, bought_token_id
+        return "BUY", usdc_out, bought_token_id, total_shares_raw / 1e6
     elif erc1155_burn:
-        return "REDEEM", usdc_in, bought_token_id
+        return "REDEEM", usdc_in, bought_token_id, total_shares_raw / 1e6
     elif erc1155_out:
-        return "SELL", usdc_in, bought_token_id
+        return "SELL", usdc_in, bought_token_id, total_shares_raw / 1e6
     else:
-        return "OTHER", max(usdc_in, usdc_out), bought_token_id
+        return "OTHER", max(usdc_in, usdc_out), bought_token_id, total_shares_raw / 1e6
 
 
 async def process_wallet_transactions(session, wallet):
@@ -334,7 +344,7 @@ async def process_wallet_transactions(session, wallet):
                     continue
 
                 # Classify this transaction
-                action_type, usdc_amount, bought_token_id = classify_token_transfers(tx_info["transfers"], address)
+                action_type, usdc_amount, bought_token_id, tx_shares = classify_token_transfers(tx_info["transfers"], address)
 
                 amount_str = ""
                 if usdc_amount > 0.01:
@@ -404,9 +414,53 @@ async def process_wallet_transactions(session, wallet):
                 except Exception as e:
                     logger.error(f"Error fetching tx logs for Limitless tx {tx_hash}: {e}")
 
-                logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} {direction} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
+                logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} {direction} | ${usdc_amount:,.2f} | {market_title} | shares={tx_shares:.1f} | {tx_hash[:16]}")
                 msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, tx_info["timestamp"], custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
+
+                # Track total shares per whale per time slot for threshold alerts
+                if action_type == "BUY" and tx_shares > 0:
+                    try:
+                        ts_str = str(tx_info["timestamp"]).replace("Z", "+00:00")
+                        dt_ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+                        epoch_ts = int(dt_ts.timestamp())
+                        slot_start = epoch_ts - (epoch_ts % 300)  # 5-min slots
+                    except Exception:
+                        slot_start = 0
+
+                    slot_key = f"{address}_{slot_start}_{direction}"
+                    if slot_key not in _whale_slot_shares:
+                        _whale_slot_shares[slot_key] = {"shares": 0.0, "alerted": False, "direction": direction}
+                    _whale_slot_shares[slot_key]["shares"] += tx_shares
+
+                    total_slot_shares = _whale_slot_shares[slot_key]["shares"]
+                    if total_slot_shares >= WHALE_SHARES_THRESHOLD and not _whale_slot_shares[slot_key]["alerted"]:
+                        _whale_slot_shares[slot_key]["alerted"] = True
+                        time_slot = _get_time_slot(market_title, tx_info["timestamp"])
+                        slot_dir = _whale_slot_shares[slot_key]["direction"]
+                        dir_emoji = "\U0001f7e2" if slot_dir == "UP" else "\U0001f534"
+
+                        alert_msg = f"\U0001f6a8\U0001f6a8\U0001f6a8 <b>BAL\u0130NA B\u00dcY\u00dcK POZ\u0130SYON!</b> \U0001f6a8\U0001f6a8\U0001f6a8\n\n"
+                        alert_msg += f"{dir_emoji} <b>{slot_dir} - {total_slot_shares:,.0f} Hisse!</b>\n"
+                        alert_msg += f"\U0001f464 Balina: <b>{wallet_name}</b>\n"
+                        if market_title:
+                            alert_msg += f"\U0001f4ca Market: <b>{market_title}</b>\n"
+                        if time_slot:
+                            alert_msg += f"\u23f0 Aral\u0131k: <b>{time_slot}</b>\n"
+                        alert_msg += f"\U0001f4e6 Toplam Hisse: <b>{total_slot_shares:,.0f}</b>\n"
+                        alert_msg += f"\n\U0001f517 <a href='https://limitless.exchange/profile/{address}'>Limitless Profil</a>"
+
+                        logger.info(f"\U0001f6a8 [WHALE ALERT] {wallet_name} | {slot_dir} | {total_slot_shares:,.0f} shares in slot!")
+                        await send_notification(alert_msg, chat_id=custom_chat_id)
+
+                    # Cleanup old slot keys (older than 10 minutes)
+                    try:
+                        now_epoch = int(datetime.now(tz=timezone.utc).timestamp())
+                        expired = [k for k in _whale_slot_shares if int(k.split("_")[1]) < now_epoch - 600]
+                        for k in expired:
+                            del _whale_slot_shares[k]
+                    except Exception:
+                        pass
 
             _first_run_wallets.add(address)
 
