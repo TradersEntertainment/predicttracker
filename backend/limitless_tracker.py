@@ -298,36 +298,68 @@ async def process_wallet_transactions(session, wallet):
                     amount_str = f"${usdc_amount:,.2f} USDC"
 
                 # Try to find market title and outcome direction (UP vs DOWN)
+                # Direction detection uses on-chain TransferBatch logs:
+                # TransferBatch.ids[0] = YES/UP token, ids[1] = NO/DOWN token
+                # TransferSingle TO whale = which token the whale bought
                 market_title = ""
-                m_info = None
+                direction = "UP"
                 try:
                     url_logs = f"{BLOCKSCOUT_API_BASE}/transactions/{tx_hash}/logs"
                     async with session.get(url_logs, timeout=5) as log_resp:
                         if log_resp.status == 200:
                             log_data = await log_resp.json()
                             log_items = log_data.get("items") or []
+
+                            # Step 1: Find conditionId for market title
                             for log_item in log_items:
                                 decoded = log_item.get("decoded") or {}
                                 params = decoded.get("parameters") or []
                                 for p in params:
-                                    p_name = p.get("name")
-                                    p_val = p.get("value")
-                                    if p_name == "conditionId" and p_val:
-                                        m_info = await fetch_limitless_market(session, str(p_val))
+                                    if p.get("name") == "conditionId" and p.get("value"):
+                                        m_info = await fetch_limitless_market(session, str(p["value"]))
                                         if m_info:
                                             market_title = m_info.get("title") or m_info.get("description") or ""
                                         break
                                 if market_title:
                                     break
+
+                            # Step 2: Detect UP vs DOWN from TransferBatch + TransferSingle
+                            # TransferBatch (from PositionSplit): ids[0]=YES/UP, ids[1]=NO/DOWN
+                            # TransferSingle TO whale: which outcome token the whale received
+                            if action_type == "BUY":
+                                outcome_ids = {}  # {token_id_str: outcome_index}
+                                log_bought_tid = None
+
+                                for log_item in log_items:
+                                    decoded = log_item.get("decoded") or {}
+                                    method_call = decoded.get("method_call") or ""
+                                    params = decoded.get("parameters") or []
+
+                                    if "TransferBatch" in method_call:
+                                        for p in params:
+                                            if p.get("name") == "ids":
+                                                ids_val = p.get("value")
+                                                if isinstance(ids_val, list) and len(ids_val) >= 2:
+                                                    outcome_ids[str(ids_val[0])] = 0  # YES/UP
+                                                    outcome_ids[str(ids_val[1])] = 1  # NO/DOWN
+
+                                    if "TransferSingle" in method_call and not log_bought_tid:
+                                        to_val = None
+                                        id_val = None
+                                        for p in params:
+                                            if p.get("name") == "to":
+                                                to_val = str(p.get("value") or "").lower()
+                                            elif p.get("name") == "id":
+                                                id_val = str(p.get("value") or "")
+                                        if to_val == address and id_val:
+                                            log_bought_tid = id_val
+
+                                if outcome_ids and log_bought_tid and log_bought_tid in outcome_ids:
+                                    idx = outcome_ids[log_bought_tid]
+                                    direction = "UP" if idx == 0 else "DOWN"
+
                 except Exception as e:
                     logger.error(f"Error fetching tx logs for Limitless tx {tx_hash}: {e}")
-
-                direction = "UP"
-                if action_type == "BUY" and m_info:
-                    tokens = m_info.get("tokens") or {}
-                    no_token_id = str(tokens.get("no") or "")
-                    if bought_token_id and no_token_id and bought_token_id == no_token_id:
-                        direction = "DOWN"
 
                 logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} {direction} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
                 msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, custom_chat_id)
