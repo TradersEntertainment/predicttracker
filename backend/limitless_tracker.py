@@ -418,49 +418,7 @@ async def process_wallet_transactions(session, wallet):
                 msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, tx_info["timestamp"], custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
 
-                # Track total shares per whale per time slot for threshold alerts
-                if action_type == "BUY" and tx_shares > 0:
-                    try:
-                        ts_str = str(tx_info["timestamp"]).replace("Z", "+00:00")
-                        dt_ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
-                        epoch_ts = int(dt_ts.timestamp())
-                        slot_start = epoch_ts - (epoch_ts % 300)  # 5-min slots
-                    except Exception:
-                        slot_start = 0
 
-                    slot_key = f"{address}_{slot_start}_{direction}"
-                    if slot_key not in _whale_slot_shares:
-                        _whale_slot_shares[slot_key] = {"shares": 0.0, "alerted": False, "direction": direction}
-                    _whale_slot_shares[slot_key]["shares"] += tx_shares
-
-                    total_slot_shares = _whale_slot_shares[slot_key]["shares"]
-                    if total_slot_shares >= WHALE_SHARES_THRESHOLD and not _whale_slot_shares[slot_key]["alerted"]:
-                        _whale_slot_shares[slot_key]["alerted"] = True
-                        time_slot = _get_time_slot(market_title, tx_info["timestamp"])
-                        slot_dir = _whale_slot_shares[slot_key]["direction"]
-                        dir_emoji = "\U0001f7e2" if slot_dir == "UP" else "\U0001f534"
-
-                        alert_msg = f"\U0001f6a8\U0001f6a8\U0001f6a8 <b>BAL\u0130NA B\u00dcY\u00dcK POZ\u0130SYON!</b> \U0001f6a8\U0001f6a8\U0001f6a8\n\n"
-                        alert_msg += f"{dir_emoji} <b>{slot_dir} - {total_slot_shares:,.0f} Hisse!</b>\n"
-                        alert_msg += f"\U0001f464 Balina: <b>{wallet_name}</b>\n"
-                        if market_title:
-                            alert_msg += f"\U0001f4ca Market: <b>{market_title}</b>\n"
-                        if time_slot:
-                            alert_msg += f"\u23f0 Aral\u0131k: <b>{time_slot}</b>\n"
-                        alert_msg += f"\U0001f4e6 Toplam Hisse: <b>{total_slot_shares:,.0f}</b>\n"
-                        alert_msg += f"\n\U0001f517 <a href='https://limitless.exchange/profile/{address}'>Limitless Profil</a>"
-
-                        logger.info(f"\U0001f6a8 [WHALE ALERT] {wallet_name} | {slot_dir} | {total_slot_shares:,.0f} shares in slot!")
-                        await send_notification(alert_msg, chat_id=custom_chat_id)
-
-                    # Cleanup old slot keys (older than 10 minutes)
-                    try:
-                        now_epoch = int(datetime.now(tz=timezone.utc).timestamp())
-                        expired = [k for k in _whale_slot_shares if int(k.split("_")[1]) < now_epoch - 600]
-                        for k in expired:
-                            del _whale_slot_shares[k]
-                    except Exception:
-                        pass
 
             _first_run_wallets.add(address)
 
@@ -468,9 +426,106 @@ async def process_wallet_transactions(session, wallet):
         logger.error(f"Error processing Limitless wallet {address}: {e}")
 
 
+async def check_whale_positions(session, wallets):
+    """
+    Holders API ile balinalarin aktif marketlerdeki toplam pozisyonunu kontrol eder.
+    5000+ hisse gecerse ozel bildirim gonderir.
+    """
+    # Check active 5-min and 15-min markets
+    now = int(time.time())
+    slugs_to_check = []
+
+    # 5-min market
+    slot_5 = now - (now % 300)
+    slugs_to_check.append((f"btc-up-or-down-5-min-{slot_5}", "BTC Up or Down - 5 Min", 300, slot_5))
+
+    # 15-min market
+    slot_15 = now - (now % 900)
+    slugs_to_check.append((f"btc-up-or-down-15-min-{slot_15}", "BTC Up or Down - 15 Min", 900, slot_15))
+
+    whale_addresses = {w["address"].lower(): w for w in wallets}
+
+    for slug, title, interval, slot_start in slugs_to_check:
+        try:
+            url = f"{LIMITLESS_API_BASE}/markets/{slug}/holders"
+            async with session.get(url, timeout=5) as resp:
+                if resp.status != 200:
+                    continue
+                holders_data = await resp.json()
+        except Exception as e:
+            logger.error(f"Error fetching holders for {slug}: {e}")
+            continue
+
+        for side_key, direction in [("yes", "UP"), ("no", "DOWN")]:
+            side_data = holders_data.get(side_key) or {}
+            holders_list = side_data.get("data") or []
+
+            for holder in holders_list:
+                holder_addr = (holder.get("user") or "").lower()
+                if holder_addr not in whale_addresses:
+                    continue
+
+                contracts_str = holder.get("contractsFormatted") or "0"
+                try:
+                    contracts = float(contracts_str.replace(",", ""))
+                except (ValueError, TypeError):
+                    contracts = 0.0
+
+                value_str = holder.get("valueUSDCFormatted") or "0"
+                try:
+                    value_usd = float(value_str.replace(",", ""))
+                except (ValueError, TypeError):
+                    value_usd = 0.0
+
+                if contracts < WHALE_SHARES_THRESHOLD:
+                    continue
+
+                # Check if we already alerted for this whale + slot + direction
+                alert_key = f"{holder_addr}_{slot_start}_{direction}"
+                if alert_key in _whale_slot_shares:
+                    continue
+                _whale_slot_shares[alert_key] = True
+
+                wallet_info = whale_addresses[holder_addr]
+                wallet_name = wallet_info.get("name") or "Limitless Balina"
+                custom_chat_id = wallet_info.get("chat_id")
+
+                dt_start = datetime.fromtimestamp(slot_start, tz=timezone.utc)
+                dt_end = datetime.fromtimestamp(slot_start + interval, tz=timezone.utc)
+                time_slot = f"{dt_start.strftime('%b %d')}, {dt_start.strftime('%H:%M')} \u2013 {dt_end.strftime('%H:%M')} UTC"
+
+                dir_emoji = "\U0001f7e2" if direction == "UP" else "\U0001f534"
+
+                alert_msg = f"\U0001f6a8\U0001f6a8\U0001f6a8 <b>BAL\u0130NA B\u00dcY\u00dcK POZ\u0130SYON!</b> \U0001f6a8\U0001f6a8\U0001f6a8\n\n"
+                alert_msg += f"{dir_emoji} <b>{direction} - {contracts:,.0f} Hisse!</b>\n"
+                alert_msg += f"\U0001f464 Balina: <b>{wallet_name}</b>\n"
+                alert_msg += f"\U0001f4ca Market: <b>{title}</b>\n"
+                alert_msg += f"\u23f0 Aral\u0131k: <b>{time_slot}</b>\n"
+                alert_msg += f"\U0001f4e6 Toplam Hisse: <b>{contracts:,.2f}</b>\n"
+                alert_msg += f"\U0001f4b0 Piyasa De\u011feri: <b>${value_usd:,.2f}</b>\n"
+                alert_msg += f"\n\U0001f517 <a href='https://limitless.exchange/profile/{holder_addr}'>Limitless Profil</a>"
+
+                logger.info(f"\U0001f6a8 [WHALE ALERT] {wallet_name} | {direction} | {contracts:,.0f} shares | ${value_usd:,.2f} | {slug}")
+                await send_notification(alert_msg, chat_id=custom_chat_id)
+
+    # Cleanup old slot keys
+    try:
+        now_epoch = int(datetime.now(tz=timezone.utc).timestamp())
+        expired = [k for k in _whale_slot_shares if not isinstance(_whale_slot_shares[k], bool) or int(k.split("_")[1]) < now_epoch - 1200]
+        for k in expired:
+            try:
+                slot_ts = int(k.split("_")[1])
+                if slot_ts < now_epoch - 1200:
+                    del _whale_slot_shares[k]
+            except (ValueError, IndexError):
+                pass
+    except Exception:
+        pass
+
+
 async def limitless_tracker_loop():
     """Ana Limitless tracker dongusu - hem wallet hem orderbook tarar"""
-    logger.info("Limitless Exchange Tracker loop started (wallet + orderbook)")
+    logger.info("Limitless Exchange Tracker loop started (wallet + orderbook + holders)")
     connector = aiohttp.TCPConnector(limit=50, enable_cleanup_closed=True, ttl_dns_cache=300)
     timeout = aiohttp.ClientTimeout(total=8)
 
@@ -485,6 +540,9 @@ async def limitless_tracker_loop():
                     active_wallets = [w for w in wallets if w.get("status", "tracking") == "tracking"]
                     for wallet in active_wallets:
                         await process_wallet_transactions(session, wallet)
+
+                    # Check whale positions via holders API (every ~2.4 seconds)
+                    await check_whale_positions(session, active_wallets)
 
                 cycle += 1
                 await asyncio.sleep(ORDERBOOK_POLL_INTERVAL)
