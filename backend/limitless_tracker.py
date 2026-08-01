@@ -196,7 +196,7 @@ def classify_token_transfers(transfers, whale_address):
     for t in transfers:
         token = t.get("token") or {}
         token_type = token.get("type", "")
-        token_addr = (token.get("address") or "").lower()
+        token_addr = (token.get("address_hash") or token.get("address") or "").lower()
         from_addr = ((t.get("from") or {}).get("hash") or "").lower()
         to_addr = ((t.get("to") or {}).get("hash") or "").lower()
         total = t.get("total") or {}
@@ -260,7 +260,7 @@ async def process_wallet_transactions(session, wallet):
             # Group transfers by tx_hash
             by_tx = {}
             for tt in items:
-                tx_hash = tt.get("tx_hash")
+                tx_hash = tt.get("transaction_hash") or tt.get("tx_hash")
                 if not tx_hash:
                     continue
                 if tx_hash not in by_tx:
