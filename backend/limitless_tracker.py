@@ -40,10 +40,10 @@ def format_limitless_wall_message(slug, side, price, contracts, total_usd, marke
     price_pct = int(price * 100)
     if side == "BUY":
         side_emoji = "\U0001f7e2"
-        direction = "UP"
+        direction = "UP Al\u0131yor"
     else:
         side_emoji = "\U0001f534"
-        direction = "DOWN"
+        direction = "DOWN Al\u0131yor"
 
     msg = "\U0001f6a8\U0001f6a8\U0001f6a8 <b>\u00d6NEML\u0130! LIMITLESS BAL\u0130NA EM\u0130R!</b> \U0001f6a8\U0001f6a8\U0001f6a8\n\n"
     msg += f"{side_emoji} <b>{side} Emri - {direction}</b>\n"
@@ -113,12 +113,6 @@ async def scan_limitless_orderbook(session):
 # ==========================================
 # LIMITLESS WALLET TRACKER (TOKEN-TRANSFERS)
 # ==========================================
-# Eski sistem sadece /transactions endpoint kullaniyordu.
-# matchOrders (pozisyon alimlari) bir relayer tarafindan baslatildigi icin
-# kullanicinin normal tx listesinde gorunmuyordu, sadece redeemPositions yakalaniyordu.
-# Yeni sistem /token-transfers endpoint kullanarak hem matchOrders (BUY/SELL)
-# hem redeemPositions yakalayabiliyor.
-
 USDC_BASE_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
 LIMITLESS_METHODS = {"matchOrders", "redeemPositions", "fillOrder", "fillLimitOrder"}
 
@@ -143,18 +137,21 @@ async def fetch_limitless_market(session, condition_id):
     except Exception as e:
         logger.error(f"Error searching Limitless market for conditionId {cid_lower}: {e}")
 
-    # Fallback for 5M BTC markets when historical search is settled
     default_m = {"title": "BTC Up or Down - 5 Min"}
     _market_cache[cid_lower] = default_m
     return default_m
 
 
-def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, market_title, amount_str, chat_id=None):
+def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, market_title, amount_str, direction="UP", chat_id=None):
     short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
 
     if action_type == "BUY":
-        action_emoji = "\U0001f7e2"
-        action_display = "Pozisyon Al\u0131m\u0131 (BUY)"
+        if direction == "DOWN":
+            action_emoji = "\U0001f534"
+            action_display = "DOWN Al\u0131yor"
+        else:
+            action_emoji = "\U0001f7e2"
+            action_display = "UP Al\u0131yor"
     elif action_type == "SELL":
         action_emoji = "\U0001f534"
         action_display = "Pozisyon Sat\u0131\u015f\u0131 (SELL)"
@@ -179,10 +176,7 @@ def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, 
 def classify_token_transfers(transfers, whale_address):
     """
     Classify a group of token transfers (same tx_hash) as BUY, SELL, or REDEEM.
-
-    BUY:    USDC flows OUT from whale + ERC-1155 flows IN to whale (matchOrders)
-    SELL:   ERC-1155 flows OUT from whale + USDC flows IN to whale (matchOrders)
-    REDEEM: ERC-1155 burned (sent to 0x000...000) + USDC flows IN (redeemPositions)
+    Also return the bought token_id (ERC-1155).
     """
     whale = whale_address.lower()
     zero_addr = "0x0000000000000000000000000000000000000000"
@@ -192,6 +186,7 @@ def classify_token_transfers(transfers, whale_address):
     erc1155_in = False
     erc1155_out = False
     erc1155_burn = False
+    bought_token_id = None
 
     for t in transfers:
         token = t.get("token") or {}
@@ -213,8 +208,11 @@ def classify_token_transfers(transfers, whale_address):
                 usdc_in += usdc_val
 
         elif token_type == "ERC-1155":
+            tid = str(t.get("token_id") or total.get("token_id") or "")
             if to_addr == whale:
                 erc1155_in = True
+                if tid:
+                    bought_token_id = tid
             elif from_addr == whale:
                 if to_addr == zero_addr:
                     erc1155_burn = True
@@ -223,19 +221,19 @@ def classify_token_transfers(transfers, whale_address):
 
     # Classify
     if erc1155_burn and usdc_in > 0:
-        return "REDEEM", usdc_in
+        return "REDEEM", usdc_in, bought_token_id
     elif erc1155_in and usdc_out > 0:
-        return "BUY", usdc_out
+        return "BUY", usdc_out, bought_token_id
     elif erc1155_out and usdc_in > 0:
-        return "SELL", usdc_in
+        return "SELL", usdc_in, bought_token_id
     elif erc1155_in:
-        return "BUY", usdc_out
+        return "BUY", usdc_out, bought_token_id
     elif erc1155_burn:
-        return "REDEEM", usdc_in
+        return "REDEEM", usdc_in, bought_token_id
     elif erc1155_out:
-        return "SELL", usdc_in
+        return "SELL", usdc_in, bought_token_id
     else:
-        return "OTHER", max(usdc_in, usdc_out)
+        return "OTHER", max(usdc_in, usdc_out), bought_token_id
 
 
 async def process_wallet_transactions(session, wallet):
@@ -275,7 +273,6 @@ async def process_wallet_transactions(session, wallet):
             for tx_hash, tx_info in by_tx.items():
                 method = tx_info["method"]
 
-                # Skip non-Limitless transactions (normal ERC-20 transfers, airdrops, etc.)
                 has_erc1155 = any(
                     (t.get("token") or {}).get("type") == "ERC-1155"
                     for t in tx_info["transfers"]
@@ -294,14 +291,15 @@ async def process_wallet_transactions(session, wallet):
                     continue
 
                 # Classify this transaction
-                action_type, usdc_amount = classify_token_transfers(tx_info["transfers"], address)
+                action_type, usdc_amount, bought_token_id = classify_token_transfers(tx_info["transfers"], address)
 
                 amount_str = ""
                 if usdc_amount > 0.01:
                     amount_str = f"${usdc_amount:,.2f} USDC"
 
-                # Try to find market title from tx logs
+                # Try to find market title and outcome direction (UP vs DOWN)
                 market_title = ""
+                m_info = None
                 try:
                     url_logs = f"{BLOCKSCOUT_API_BASE}/transactions/{tx_hash}/logs"
                     async with session.get(url_logs, timeout=5) as log_resp:
@@ -324,8 +322,15 @@ async def process_wallet_transactions(session, wallet):
                 except Exception as e:
                     logger.error(f"Error fetching tx logs for Limitless tx {tx_hash}: {e}")
 
-                logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
-                msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, custom_chat_id)
+                direction = "UP"
+                if action_type == "BUY" and m_info:
+                    tokens = m_info.get("tokens") or {}
+                    no_token_id = str(tokens.get("no") or "")
+                    if bought_token_id and no_token_id and bought_token_id == no_token_id:
+                        direction = "DOWN"
+
+                logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} {direction} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
+                msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
 
             _first_run_wallets.add(address)
