@@ -1,6 +1,7 @@
 import asyncio
 import time
 import aiohttp
+from datetime import datetime, timezone, timedelta
 import logging
 from database import get_limitless_wallets_db, is_activity_seen, record_activity
 from bot_engine import send_notification
@@ -142,7 +143,46 @@ async def fetch_limitless_market(session, condition_id):
     return default_m
 
 
-def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, market_title, amount_str, direction="UP", chat_id=None):
+def _get_time_slot(market_title, tx_timestamp):
+    """
+    Market title ve tx timestamp'inden zaman araligi hesaplar.
+    Ornek: 'BTC Up or Down - 5 Min' + '2026-08-01T02:17:00Z' -> 'Aug 1, 02:15 - 02:20 UTC'
+    """
+    if not tx_timestamp:
+        return ""
+
+    try:
+        ts_str = str(tx_timestamp).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
+    except Exception:
+        return ""
+
+    title_lower = (market_title or "").lower()
+    if "5 min" in title_lower or "5-min" in title_lower:
+        interval_sec = 300
+    elif "15 min" in title_lower or "15-min" in title_lower:
+        interval_sec = 900
+    elif "1 hour" in title_lower or "1h" in title_lower or "hourly" in title_lower:
+        interval_sec = 3600
+    elif "4 hour" in title_lower or "4h" in title_lower:
+        interval_sec = 14400
+    else:
+        return ""
+
+    epoch = int(dt.timestamp())
+    slot_start = epoch - (epoch % interval_sec)
+    slot_end = slot_start + interval_sec
+
+    dt_start = datetime.fromtimestamp(slot_start, tz=timezone.utc)
+    dt_end = datetime.fromtimestamp(slot_end, tz=timezone.utc)
+
+    if dt_start.date() == dt_end.date():
+        return f"{dt_start.strftime('%b %d')}, {dt_start.strftime('%H:%M')} \u2013 {dt_end.strftime('%H:%M')} UTC"
+    else:
+        return f"{dt_start.strftime('%b %d %H:%M')} \u2013 {dt_end.strftime('%b %d %H:%M')} UTC"
+
+
+def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, market_title, amount_str, direction="UP", tx_timestamp="", chat_id=None):
     short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
 
     if action_type == "BUY":
@@ -165,7 +205,10 @@ def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, 
     msg = f"{action_emoji} <b>LIMITLESS BAL\u0130NA \u0130\u015eLEM\u0130!</b>\n\n"
     msg += f"\U0001f464 Balina: <b>{wallet_name}</b> (<code>{short_addr}</code>)\n"
     if market_title:
+        time_slot = _get_time_slot(market_title, tx_timestamp)
         msg += f"\U0001f4ca Market: <b>{market_title}</b>\n"
+        if time_slot:
+            msg += f"\u23f0 Aral\u0131k: <b>{time_slot}</b>\n"
     msg += f"\u26a1 \u0130\u015flem: <b>{action_display}</b>\n"
     if amount_str:
         msg += f"\U0001f4b0 Tutar: <b>{amount_str}</b>\n"
@@ -362,7 +405,7 @@ async def process_wallet_transactions(session, wallet):
                     logger.error(f"Error fetching tx logs for Limitless tx {tx_hash}: {e}")
 
                 logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} {direction} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
-                msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, custom_chat_id)
+                msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, direction, tx_info["timestamp"], custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
 
             _first_run_wallets.add(address)
