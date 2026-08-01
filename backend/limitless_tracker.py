@@ -111,8 +111,17 @@ async def scan_limitless_orderbook(session):
 
 
 # ==========================================
-# LIMITLESS WALLET TRACKER (ON-CHAIN)
+# LIMITLESS WALLET TRACKER (TOKEN-TRANSFERS)
 # ==========================================
+# Eski sistem sadece /transactions endpoint kullaniyordu.
+# matchOrders (pozisyon alimlari) bir relayer tarafindan baslatildigi icin
+# kullanicinin normal tx listesinde gorunmuyordu, sadece redeemPositions yakalaniyordu.
+# Yeni sistem /token-transfers endpoint kullanarak hem matchOrders (BUY/SELL)
+# hem redeemPositions yakalayabiliyor.
+
+USDC_BASE_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+LIMITLESS_METHODS = {"matchOrders", "redeemPositions", "fillOrder", "fillLimitOrder"}
+
 
 async def fetch_limitless_market(session, condition_id):
     if not condition_id:
@@ -140,57 +149,159 @@ async def fetch_limitless_market(session, condition_id):
     return default_m
 
 
-def format_limitless_message(wallet_name, wallet_address, tx_hash, method, market_title, amount_str, chat_id=None):
+def format_limitless_message(wallet_name, wallet_address, tx_hash, action_type, market_title, amount_str, chat_id=None):
     short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-    if "redeem" in method.lower():
-        method_display = "Redeem Position \U0001f3af"
-    else:
-        method_display = method
 
-    msg = "\U0001f300 <b>LIMITLESS EXCHANGE BAL\u0130NA \u0130\u015eLEM\u0130!</b>\n\n"
+    if action_type == "BUY":
+        action_emoji = "\U0001f7e2"
+        action_display = "Pozisyon Al\u0131m\u0131 (BUY)"
+    elif action_type == "SELL":
+        action_emoji = "\U0001f534"
+        action_display = "Pozisyon Sat\u0131\u015f\u0131 (SELL)"
+    elif action_type == "REDEEM":
+        action_emoji = "\U0001f3af"
+        action_display = "Redeem (Kazan\u00e7 \u00c7ekme)"
+    else:
+        action_emoji = "\u26a1"
+        action_display = action_type
+
+    msg = f"{action_emoji} <b>LIMITLESS BAL\u0130NA \u0130\u015eLEM\u0130!</b>\n\n"
     msg += f"\U0001f464 Balina: <b>{wallet_name}</b> (<code>{short_addr}</code>)\n"
     if market_title:
         msg += f"\U0001f4ca Market: <b>{market_title}</b>\n"
-    msg += f"\u26a1 \u0130\u015flem: <b>{method_display}</b>\n"
+    msg += f"\u26a1 \u0130\u015flem: <b>{action_display}</b>\n"
     if amount_str:
         msg += f"\U0001f4b0 Tutar: <b>{amount_str}</b>\n"
     msg += f"\n\U0001f517 <a href='https://limitless.exchange/profile/{wallet_address}'>Limitless Profil</a> | <a href='https://basescan.org/tx/{tx_hash}'>Basescan</a>"
     return msg
 
 
+def classify_token_transfers(transfers, whale_address):
+    """
+    Classify a group of token transfers (same tx_hash) as BUY, SELL, or REDEEM.
+
+    BUY:    USDC flows OUT from whale + ERC-1155 flows IN to whale (matchOrders)
+    SELL:   ERC-1155 flows OUT from whale + USDC flows IN to whale (matchOrders)
+    REDEEM: ERC-1155 burned (sent to 0x000...000) + USDC flows IN (redeemPositions)
+    """
+    whale = whale_address.lower()
+    zero_addr = "0x0000000000000000000000000000000000000000"
+
+    usdc_in = 0.0
+    usdc_out = 0.0
+    erc1155_in = False
+    erc1155_out = False
+    erc1155_burn = False
+
+    for t in transfers:
+        token = t.get("token") or {}
+        token_type = token.get("type", "")
+        token_addr = (token.get("address") or "").lower()
+        from_addr = ((t.get("from") or {}).get("hash") or "").lower()
+        to_addr = ((t.get("to") or {}).get("hash") or "").lower()
+        total = t.get("total") or {}
+        raw_value = total.get("value") or "0"
+
+        if token_type == "ERC-20" and token_addr == USDC_BASE_ADDRESS:
+            try:
+                usdc_val = int(raw_value) / 1e6
+            except (ValueError, TypeError):
+                usdc_val = 0.0
+            if from_addr == whale:
+                usdc_out += usdc_val
+            elif to_addr == whale:
+                usdc_in += usdc_val
+
+        elif token_type == "ERC-1155":
+            if to_addr == whale:
+                erc1155_in = True
+            elif from_addr == whale:
+                if to_addr == zero_addr:
+                    erc1155_burn = True
+                else:
+                    erc1155_out = True
+
+    # Classify
+    if erc1155_burn and usdc_in > 0:
+        return "REDEEM", usdc_in
+    elif erc1155_in and usdc_out > 0:
+        return "BUY", usdc_out
+    elif erc1155_out and usdc_in > 0:
+        return "SELL", usdc_in
+    elif erc1155_in:
+        return "BUY", usdc_out
+    elif erc1155_burn:
+        return "REDEEM", usdc_in
+    elif erc1155_out:
+        return "SELL", usdc_in
+    else:
+        return "OTHER", max(usdc_in, usdc_out)
+
+
 async def process_wallet_transactions(session, wallet):
+    """
+    Token-transfers tabanli wallet tracker.
+    /token-transfers endpoint'i kullanarak hem matchOrders (BUY/SELL) hem redeemPositions yakalar.
+    """
     address = wallet["address"].lower()
     wallet_name = wallet.get("name") or "Limitless Balina"
     custom_chat_id = wallet.get("chat_id")
 
     is_initial_run = address not in _first_run_wallets
 
-    url = f"{BLOCKSCOUT_API_BASE}/addresses/{address}/transactions"
+    url = f"{BLOCKSCOUT_API_BASE}/addresses/{address}/token-transfers"
     try:
-        async with session.get(url, timeout=6) as resp:
+        async with session.get(url, timeout=8) as resp:
             if resp.status != 200:
                 return
             data = await resp.json()
             items = data.get("items") or []
 
-            for tx in reversed(items):
-                tx_hash = tx.get("hash")
+            # Group transfers by tx_hash
+            by_tx = {}
+            for tt in items:
+                tx_hash = tt.get("tx_hash")
                 if not tx_hash:
+                    continue
+                if tx_hash not in by_tx:
+                    by_tx[tx_hash] = {
+                        "method": tt.get("method") or "unknown",
+                        "timestamp": tt.get("timestamp") or "",
+                        "transfers": []
+                    }
+                by_tx[tx_hash]["transfers"].append(tt)
+
+            # Filter to only Limitless-relevant transactions
+            for tx_hash, tx_info in by_tx.items():
+                method = tx_info["method"]
+
+                # Skip non-Limitless transactions (normal ERC-20 transfers, airdrops, etc.)
+                has_erc1155 = any(
+                    (t.get("token") or {}).get("type") == "ERC-1155"
+                    for t in tx_info["transfers"]
+                )
+                is_limitless_method = method in LIMITLESS_METHODS
+                if not has_erc1155 and not is_limitless_method:
                     continue
 
                 seen = await is_activity_seen(address, tx_hash)
                 if seen:
                     continue
 
-                await record_activity(address, tx_hash, str(tx.get("timestamp") or ""))
+                await record_activity(address, tx_hash, tx_info["timestamp"])
 
                 if is_initial_run:
                     continue
 
-                method = tx.get("method") or "Contract Call"
-                market_title = ""
-                amount_str = ""
+                # Classify this transaction
+                action_type, usdc_amount = classify_token_transfers(tx_info["transfers"], address)
 
+                amount_str = ""
+                if usdc_amount > 0.01:
+                    amount_str = f"${usdc_amount:,.2f} USDC"
+
+                # Try to find market title from tx logs
+                market_title = ""
                 try:
                     url_logs = f"{BLOCKSCOUT_API_BASE}/transactions/{tx_hash}/logs"
                     async with session.get(url_logs, timeout=5) as log_resp:
@@ -207,20 +318,14 @@ async def process_wallet_transactions(session, wallet):
                                         m_info = await fetch_limitless_market(session, str(p_val))
                                         if m_info:
                                             market_title = m_info.get("title") or m_info.get("description") or ""
-                                    elif p_name in ["payout", "value"] and p_val:
-                                        try:
-                                            val_num = float(p_val)
-                                            if val_num > 1000:
-                                                usdc_val = val_num / 1e6
-                                                if 0.1 <= usdc_val <= 1e7:
-                                                    amount_str = f"~${usdc_val:,.2f} USDC"
-                                        except Exception:
-                                            pass
+                                        break
+                                if market_title:
+                                    break
                 except Exception as e:
                     logger.error(f"Error fetching tx logs for Limitless tx {tx_hash}: {e}")
 
-                logger.info(f"\U0001f300 [LIMITLESS ALERT] {wallet_name} | Tx: {tx_hash[:10]} | Method: {method} | Market: {market_title}")
-                msg = format_limitless_message(wallet_name, address, tx_hash, method, market_title, amount_str, custom_chat_id)
+                logger.info(f"\U0001f300 [LIMITLESS] {wallet_name} | {action_type} | ${usdc_amount:,.2f} | {market_title} | {tx_hash[:16]}")
+                msg = format_limitless_message(wallet_name, address, tx_hash, action_type, market_title, amount_str, custom_chat_id)
                 await send_notification(msg, chat_id=custom_chat_id)
 
             _first_run_wallets.add(address)
